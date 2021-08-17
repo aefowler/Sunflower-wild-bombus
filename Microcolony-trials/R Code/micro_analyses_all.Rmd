@@ -1,0 +1,1663 @@
+---
+title: "2017 Wild Impatiens Microcolonies"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 6
+    highlight: pygments
+---
+This R code is for analyzing the effect of pollen diet and Crithidia infection on wild Bombus impatiens microcoloniesfor the manuscript titled: "Sunflower pollen reduces a gut pathogen in the model bee species, Bombus impatiens, but has weaker effects in three wild congeners"
+
+Authors: Alison Fowler*, Jonathan Giacomini, Sara June Connon, Becky Irwin, and Lynn Adler 
+Corresponding author*: aefowler@umass.edu 
+
+## Libraries 
+```{r, results = 'hide', message = FALSE, warning = FALSE}
+library(lattice)
+library(psych)
+library(car)
+library(AER)
+library(MASS)
+library(corrplot)
+library(AICcmodavg)
+library(dplyr)
+library(tidyr)
+library(lme4)
+library(mgcv)
+library(scatterplot3d)
+library(bbmle)
+library(emmeans)
+library(ggplot2)
+library(tidyverse)
+library(ggalt)
+library(multcomp)
+library(coxme)
+library(survminer)
+library(DHARMa)
+library(ggsignif)
+```
+
+## Microcolony durations 
+
+23 should be removed from everything because it took loo long to lay eggs and its trial was much longer than all the others 
+
+```{r, message=F}
+# import daily activities data sheet 
+# this includes day when first egg cells appeared, worker deaths, worker dissection dates, and  notes. 
+# the "duration" column is the length of trial: start to termination 
+# the duration differed between microcolonies because it depended on how long they took to lay eggs. 
+
+acts <- read_csv("2017_micros_daily_activities.csv")
+
+acts <- acts[complete.cases(acts$DURATION), ]
+hist(acts$DURATION)
+
+acts <- acts %>% 
+  rename(Microcolony = "Microcol. #")
+acts$Microcolony <- as.factor(acts$Microcolony)
+
+# select just the microcolony and duration columns 
+duration <- acts %>% select(1,14)
+```
+
+```{r}
+# look at how the durations are distributed by treatment 
+ggplot(data = acts) + 
+  geom_density(aes(x = DURATION, fill= Treatment, alpha = 0.2)) + 
+  xlab("Duration") + 
+  ylab("Frequency")
+
+# lets see what it looks like if we remove this outlier
+acts2 <- acts %>% 
+  filter(Microcolony != "23")
+duration2 <- duration %>% 
+  filter(Microcolony != "23")
+
+ggplot(data = acts2) + 
+  geom_density(aes(x = DURATION, fill= Treatment, alpha = 0.2)) 
+```
+
+## FIRST ANALYSIS: Survival / Death hazard 
+
+### Get set up 
+
+load in data sheet that contains ALL bees with column for dead (0/1) and days until death (only filled in for bees with 1 for dead)
+
+```{r, message = F}
+mortality<- read_csv("2017_micro_mortality_2.csv")
+
+# make things factors
+mortality$Colony_ID <- as.factor(mortality$Colony_ID)
+mortality$Treatment <- as.factor(mortality$Treatment)
+
+## add duration column 
+mortality <- merge(duration, mortality, by = "Microcolony")
+```
+
+### Explore data 
+
+```{r}
+boxplot(Days_survived ~ Treatment, data=mortality)
+boxplot(Days_survived ~ Colony_ID, data=mortality)
+plot(Days_survived ~ DURATION, data = mortality_dur)
+
+summary(mortality$Colony_ID)
+summary(mortality$Treatment)
+
+boxplot(Days_survived ~ Infection, data = mortality)
+boxplot(Days_survived ~ Diet, data = mortality)
+
+# what does it look like if we only consider dead bees 
+
+dead_bees <- mortality %>% 
+  filter(Dead == 1)
+
+summary(dead_bees$Colony_ID)
+summary(dead_bees$Treatment)
+```
+
+### Survival model
+
+```{r}
+# make a survival object 
+event <- mortality$Dead_before_day36
+time<-mortality$Days_survived
+survival<-Surv(time, event)
+```
+
+```{r}
+# model survival as the response 
+mort_model<- coxme(survival ~ Diet*Infection + (1|Colony_ID/Microcolony), data=mortality)
+
+summary(mort_model)
+Anova(mort_model, type = "III")
+```
+
+```{r}
+mort_model2<- coxme(survival ~ Diet*Infection + (1|Microcolony), data=mortality)
+summary(mort_model2)
+Anova(mort_model2, type = "III")
+```
+
+```{r}
+mort_model3<- coxme(survival ~ Diet*Infection + (1|Colony_ID), data=mortality)
+summary(mort_model3)
+Anova(mort_model3, type = "III")
+```
+
+```{r}
+mort_model4 <- coxph(survival ~ Diet*Infection, data = mortality)
+```
+
+Add duration
+```{r}
+mort_model5<- coxme(survival ~ Diet*Infection + DURATION + (1|Colony_ID/Microcolony), data=mortality_dur)
+```
+
+```{r}
+AICtab(mort_model, mort_model2, mort_model3, mort_model4, mort_model5)
+```
+mort model and 2 do best 
+
+### Make the curve 
+
+```{r}
+#mort_plot <- survfit(survival ~ Diet * Infection, data=mortality)
+#Error in survfit.formula(survival ~ Diet * Infection,  : 
+#  Interaction terms are not valid for this function
+
+mort_plot <- survfit(survival ~ Diet + Infection, data=mortality)
+print(mort_plot)
+
+summary(mort_plot)
+summary(mort_plot)$table
+```
+
+Plot with ggplot
+```{r}
+survival_plot<- 
+  ggsurvplot(mort_plot,
+           data = mortality,
+           size = 1.75,
+           palette = c("goldenrod1", "goldenrod1", "royalblue3", "royalblue3"),
+           linetype = c("solid", "dotdash", "solid", "dotdash"),
+           legend.labs = 
+             c("50% SF + Infected",
+               "50% SF + Uninfected", 
+               "WF + Infected", 
+               "WF + Uninfected"),
+           legend = c(0.2,0.25),
+           ggtheme = theme_bw(base_size = 18),
+           legend.title = "Treatment",
+           xlab = "Day",
+           break.x.by = 10,
+           ylim = c(0.7,1)
+)
+```
+
+```{r}
+survival_plot
+```
+
+
+## SECOND ANALYSIS: Crithidia counts 
+
+### Get set up 
+
+```{r, message = F}
+# import new datafile where I manually changed the treatments of those five microcolonies 
+# 5 K
+# 13 K
+# 15 50
+# 27 50 
+# 29 K
+
+count_data <- read_csv("2017_micro_counts_2.csv")
+
+# change things to factors
+count_data$Microcolony <- as.factor(count_data$Microcolony)
+count_data$Date <- as.factor(count_data$Date)
+count_data$Colony_ID <- as.factor(count_data$Colony_ID)
+count_data$Treatment <- as.factor(count_data$Treatment)
+
+# remove microcolony 63
+count_data <- count_data %>% 
+  filter(Microcolony != 63)
+
+# rename levels of treatment - just make new columns  
+count_data <- count_data %>% 
+  mutate(Diet = grepl("50", count_data$Treatment, fixed = T))
+
+# right now, it says TRUE if it was 50, and FALSE if it was K 
+# now replace those words with our diets 
+count_data$Diet <- replace(count_data$Diet, count_data$Diet=="TRUE", "50% Sunflower")
+count_data$Diet <- replace(count_data$Diet, count_data$Diet=="FALSE", "Wildflower")
+
+# combine with duration data and subset infected
+
+count_dur <- merge(duration, count_data, by= "Microcolony")
+
+inf_count_dur <- count_dur %>% 
+  filter(Treatment != "K-U") %>% 
+  filter(Treatment != "50-U")
+
+infected_data <- inf_count_dur
+```
+
+### Data exploration 
+
+Sample sizes 
+
+```{r}
+summary(inf_count_dur$Microcolony)
+summary(inf_count_dur$Colony_ID)
+summary(inf_count_dur$Treatment)
+length(unique(inf_count_dur$Microcolony))
+```
+
+```{r}
+boxplot(Count ~ Treatment, data = inf_count_dur) 
+boxplot(Count ~ Microcolony, data = inf_count_dur)
+plot(Count ~ MCL, data=inf_count_dur)
+boxplot(Count ~ Colony_ID, data = inf_count_dur)
+
+(ggplot(inf_count_dur, aes(x=Treatment, y=Count))
+  +geom_point(aes(color=Colony_ID),alpha=0.5)
+  +theme(legend.position="left"))
+```
+
+### What to do with unintentionally infected micros? 
+
+```{r}
+count_data$Colony_ID <- as.factor(count_data$Colony_ID)
+(ggplot(count_data, aes(x=Treatment, y=Count))
+  +geom_boxplot(aes(color=Colony_ID),alpha=0.5)
+  +theme(legend.position="left"))
+```
+
+Run a model to see if the U and I from colony 10 differ significantly in counts 
+```{r}
+# import old data set with old treatments for those 5 
+old_count_data <- read_csv("2017_micro_counts.csv")
+
+old_count_data <- old_count_data %>% 
+  mutate(Diet = grepl("50", old_count_data$Treatment, fixed = T)) %>% 
+  mutate(Infection = grepl("I", old_count_data$Treatment, fixed = T))
+old_count_data$Diet <- replace(old_count_data$Diet, old_count_data$Diet=="TRUE", "50% Sunflower")
+old_count_data$Diet <- replace(old_count_data$Diet, old_count_data$Diet=="FALSE", "Wildflower")
+old_count_data$Infection <- replace(old_count_data$Infection, old_count_data$Infection=="TRUE", "Intentionally")
+old_count_data$Infection <- replace(old_count_data$Infection, old_count_data$Infection=="FALSE", "Unintentionally")
+
+col_10 <- old_count_data %>% 
+  filter(Colony_ID == "10")
+
+boxplot(Count ~ Infection * Diet, data = col_10)
+
+hist(col_10$Count)
+
+col_10_mod <- glm.nb(Count ~ Diet * Infection + MCL, data = col_10)
+
+plot(col_10_mod)
+simresid <- simulateResiduals(col_10_mod, plot = T)
+Anova(col_10_mod, type = "III")
+```
+
+Treatment is NS therefore we will change those treatments to "Infected" and include them in remaining analyses. 
+
+```{r}
+# quick look at how duration affects counts 
+plot(Count ~ DURATION, data = inf_count_dur) + abline(lm(Count~DURATION, data = inf_count_dur))
+
+ggplot(inf_count_dur, aes(x = DURATION, y = Count, color = Treatment)) + 
+  geom_point(aes(color = Treatment)) + 
+  geom_smooth(method='lm', se = F) + 
+  xlab("Duration") + 
+  ylab("Crithidia count") + 
+  ylim(0,450) + 
+  theme(text = element_text(size = 15))
+
+test <- glm.nb(Count ~ Treatment + DURATION + MCL, data = inf_count_dur)
+plot(test)
+simresid <- simulateResiduals(test, plot= T)
+Anova(test)
+summary(test)
+```
+
+Note: all individuals from colony 9 were in the same microcolony (and treatment). 
+
+### Model selection
+
+```{r}
+# DURATION AND WING
+mod21 <- glmer.nb(Count ~ Diet + MCL + DURATION + (1|Colony_ID) + (1|Date), data = inf_count_dur)
+# unable to evaluate scaled gradientModel failed to converge: degenerate  Hessian with 1 negative eigenvaluesboundary (singular) fit: see ?isSingular 
+
+mod22 <- glmer.nb(Count ~ Diet + MCL + DURATION + (1|Colony_ID), data = inf_count_dur) # singular 
+
+# NO WING 
+mod23 <- glmer.nb(Count ~ Diet + DURATION + (1|Colony_ID) + (1|Date), data = inf_count_dur) # singular 
+mod24 <- glmer.nb(Count ~ Diet + DURATION + (1|Colony_ID), data = inf_count_dur) # singular 
+
+# WING BUT NO REs 
+mod25 <- glm.nb(Count ~ Diet + MCL + DURATION, data = inf_count_dur)
+
+# NO WING, NO REs 
+mod26 <- glm.nb(Count ~ Diet + DURATION, data = inf_count_dur)
+
+# NO DURATION, NO WING, NO REs 
+mod27 <- glm.nb(Count ~ Diet, data = inf_count_dur)
+
+mod28 <- glmer.nb(Count ~ Diet + DURATION + (1|Colony_ID/Microcolony), data = inf_count_dur)
+
+AICtab(mod21, mod22, mod23, mod24, mod25, mod26, mod27, mod28)
+
+AICtab(mod20, mod26, mod28)
+```
+
+```{r}
+anova(mod22, mod25)
+```
+
+USE MODEL 26
+
+```{r}
+Anova(mod26)
+summary(mod26)
+```
+
+### Plot 
+
+```{r}
+count_means<-emmeans(mod26, ~Diet) 
+means.to.plot<-as.data.frame(summary(count_means))
+means.to.plot$expmean<- exp(means.to.plot$emmean)
+means.to.plot$tfupper<-exp(means.to.plot$emmean + means.to.plot$SE)
+means.to.plot$tlower<-exp(means.to.plot$emmean - means.to.plot$SE)
+exp.mean<-means.to.plot$expmean
+means.to.plot
+```
+
+```{r}
+# PLOT 
+micro_counts_plot <- 
+  ggplot(means.to.plot, aes(x=Diet, 
+                          y=means.to.plot$expmean, 
+                          ymin=means.to.plot$tlower,
+                          ymax=means.to.plot$tfupper)) + 
+  theme_classic()+ 
+  ylim(25,80) +
+  geom_point(stat="identity",
+             aes(color = Diet),
+             pch = 15,
+             size = 5.5) +
+  geom_line() +
+  labs(y = expression(paste(italic("Crithidia ") , "count (cells per 0.02 μL)"))) +
+  geom_errorbar(width=0.05)+
+  theme(axis.text.x = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"), 
+        axis.text.y = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"),
+        text = element_text(size=18),
+        axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "none") +
+#  geom_signif(comparisons=list(c("50-50", "WF")), 
+#              annotation = "*",
+#              y_position = 75, 
+#              tip_length = 0, 
+#              vjust=0.4,
+#              textsize = 8) +
+  scale_color_manual(values = c("goldenrod1", "royalblue3")) + 
+  scale_x_discrete(labels = c("50% SF", "Wildflower")) +
+  geom_text(x = 1, y = 80, label = expression(paste("Diet: ", italic("P"), "= 0.02")), size = 5)
+```
+
+```{r}
+micro_counts_plot
+```
+
+## THIRD ANALYSIS: Reproduction 
+
+### Get set up 
+
+```{r, message = F}
+offspring<-read_csv("2017_micro_offspring_3.csv") 
+
+# make things factors
+offspring$Treatment <-as.factor(offspring$Treatment)
+offspring$Diet <-as.factor(offspring$Diet)
+offspring$Infection <-as.factor(offspring$Infection)
+
+# remove colony 63 and 23
+offspring <- offspring %>% 
+  filter(Microcolony != 63) %>% 
+  filter(Microcolony != 23)
+
+# rename diets
+levels(offspring$Diet)[levels(offspring$Diet) =="50/50"] <- "50% Sunflower"
+levels(offspring$Diet)[levels(offspring$Diet) == "WF"] <- "Wildflower"
+
+# combine with duration 
+offspring_dur <- merge(duration, offspring, by= "Microcolony")
+```
+
+### Data exploration 
+
+Number of offspring 
+
+```{r}
+summary(offspring$Treatment)
+
+plot(alive_LPM ~ DURATION, col = Treatment, pch = 19, data = offspring_dur) + 
+  abline(lm(alive_LPM ~ DURATION, data = offspring_dur)) 
+
+ggplot(offspring_dur, aes(x = DURATION, y = alive_LPM, color = Treatment)) + 
+  geom_point(aes(color = Treatment)) + 
+  geom_smooth(method='lm', se = F) + 
+  xlab("Duration") + 
+  ylab("Number of offspring") + 
+  ylim(0,15) + 
+  theme(text = element_text(size=15))
+```
+
+```{r}
+boxplot(lpnumber~Treatment, data=offspring) # total number of larvae and pupae produced 
+boxplot(av_lpweight~Treatment, data=offspring) # average weight of larvae and pupae
+boxplot(males~Treatment, data=offspring) # number of males 
+
+# interesting, four out of the fives colonies that produced adult males were fed WF 
+
+boxplot(av_male_wing ~ Treatment, data=offspring) # male sizes 
+boxplot(total_lp_weight ~ Treatment, data=offspring) # sum weight of all larvae and pupae
+boxplot(total_offspring~Treatment, data=offspring) # total number of offspring (eggs, larvae, pupae, males)
+boxplot(HP ~ Treatment, data=offspring) # number of honey pots made, looks like no effect
+boxplot(days ~Treatment, data=offspring) # number of days until eggs laid, not much effect 
+
+# interaction plots 
+interaction.plot(offspring$Infection, offspring$Diet, offspring$total_offspring)
+interaction.plot(offspring$Infection, offspring$Diet, offspring$LPM)
+interaction.plot(offspring$Infection, offspring$Diet, offspring$lpnumber)
+interaction.plot(offspring$Infection, offspring$Diet, offspring$males)
+```
+
+```{r}
+# plot responses by colony - looks like it may be important 
+
+boxplot(lpnumber~Colony_ID, data=offspring)
+boxplot(av_lpweight~Colony_ID, data=offspring)
+boxplot(males~Colony_ID, data=offspring)
+boxplot(av_male_wing~Colony_ID, data=offspring)
+boxplot(total_lp_weight ~ Colony_ID, data=offspring)
+boxplot(total_offspring~Colony_ID, data=offspring)
+boxplot(LPM ~ Colony_ID, data = offspring)
+
+boxplot(HP ~ Colony_ID, data=offspring)
+boxplot(days ~Colony_ID, data=offspring)
+
+no_offspring <- offspring %>% 
+  filter(LPM == 0)
+```
+
+### 1st response: number of alive larvae, pupae, males (LPM)
+
+#### Model
+
+```{r}
+hist(offspring$alive_LPM)
+
+# nested REs + duration 
+lpm_mod <- glmer(alive_LPM ~ Diet*Infection + DURATION + (1|Colony_ID/Microcolony), 
+                 data = offspring_dur, 
+                 family = poisson,
+                 contrasts = list(Diet = contr.sum,
+                                  Infection = contr.sum))
+
+# nested REs, no duration 
+lpm_mod2 <- glmer(alive_LPM ~ Diet*Infection + (1|Colony_ID/Microcolony), 
+                 data = offspring_dur, 
+                 family = poisson,
+                 contrasts = list(Diet = contr.sum,
+                                  Infection = contr.sum))
+
+# colony as RE + duration
+lpm_mod3 <- glmer(alive_LPM ~ Diet*Infection + DURATION + (1|Colony_ID), 
+                 data = offspring_dur, 
+                 family = poisson,
+                 contrasts = list(Diet = contr.sum,
+                                  Infection = contr.sum))
+
+# colony as RE, no duration
+lpm_mod4 <- glmer(alive_LPM ~ Diet*Infection + (1|Colony_ID), 
+                 data = offspring_dur, 
+                 family = poisson,
+                 contrasts = list(Diet = contr.sum,
+                                  Infection = contr.sum))
+
+# micro as RE + duration 
+lpm_mod5 <- glmer(alive_LPM ~ Diet*Infection + DURATION + (1|Microcolony), 
+                 data = offspring_dur, 
+                 family = poisson,
+                 contrasts = list(Diet = contr.sum,
+                                  Infection = contr.sum))
+
+# micro as RE, no duration 
+lpm_mod6 <- glmer(alive_LPM ~ Diet*Infection + (1|Microcolony), 
+                 data = offspring_dur, 
+                 family = poisson,
+                 contrasts = list(Diet = contr.sum,
+                                  Infection = contr.sum))
+
+# no RE + duration 
+lpm_mod7 <- glm(alive_LPM ~ Diet*Infection + DURATION, 
+                 data = offspring_dur, 
+                 family = poisson,
+                 contrasts = list(Diet = contr.sum,
+                                  Infection = contr.sum))
+
+# no RE, no duration 
+lpm_mod8 <- glm(alive_LPM ~ Diet*Infection, 
+                 data = offspring_dur, 
+                 family = poisson,
+                 contrasts = list(Diet = contr.sum,
+                                  Infection = contr.sum))
+
+AICtab(lpm_mod, lpm_mod2, lpm_mod3, lpm_mod4, lpm_mod5, lpm_mod6, lpm_mod7, lpm_mod8)
+```
+
+
+```{r}
+# look at residuals and model diagnostic test 
+plot(lpm_mod)
+simresid <- simulateResiduals(lpm_mod, plot = T) # looks good 
+testResiduals(lpm_mod)
+```
+
+```{r}
+# look at output 
+summary(lpm_mod)
+Anova(lpm_mod, type = "III")
+```
+
+#### Plot
+
+```{r}
+means <- emmeans(lpm_mod, ~ Diet*Infection)
+
+repro.means.to.plot<-as.data.frame(summary(means))
+
+repro.means.to.plot$expmean<- exp(repro.means.to.plot$emmean)
+repro.means.to.plot$tfupper<-exp(repro.means.to.plot$emmean + repro.means.to.plot$SE)
+repro.means.to.plot$tlower<-exp(repro.means.to.plot$emmean - repro.means.to.plot$SE)
+exp.mean<-repro.means.to.plot$expmean
+repro.means.to.plot
+```
+
+
+```{r}
+# PLOT 
+repro_plot<- ggplot(repro.means.to.plot, aes(x=Diet, group = Infection,
+                                   y=repro.means.to.plot$expmean, 
+                                   ymin=repro.means.to.plot$tlower,
+                                   ymax=repro.means.to.plot$tfupper)) + 
+  theme_classic() +
+  ylim(0,4.5) + 
+  geom_point(stat="identity",
+             aes(color = Diet,
+                 shape = Infection), 
+             size = 5.5, 
+             position = position_dodge(width=0.075)) +
+  scale_color_manual(values=c("goldenrod1", "royalblue3")) +
+  scale_shape_manual(values=c(15, 16)) + 
+  ylab("Number of offspring") +
+  geom_errorbar(width = 0.05,
+                position = position_dodge(width = 0.075)) +
+  theme(axis.text.x = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.00, 
+                                   hjust = 0.5,
+                                   colour = "black"),
+        axis.text.y = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.00, 
+                                   hjust = 0.5,
+                                   colour = "black"),
+        axis.title.y = element_text(size = 18,
+                                    margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position= "none",
+        legend.text = element_text(size = 18),
+        legend.title = element_text(size = 18)) + 
+  scale_x_discrete(labels = c("50% SF", "Wildflower")) +
+ # geom_signif(comparisons=list(c("50-50", "WF")), 
+#              annotation = "***",
+#              y_position = 3.8, 
+#              tip_length = 0, 
+#              vjust=0.4,
+#              textsize = 8) + 
+  guides(color=FALSE) + 
+  geom_text(x = 1, y = 4.4, label = expression(paste("Diet: ", italic("P"), "= 0.0003")), size = 5) + 
+  geom_text(x = 1, y = 4, label = expression(paste("Infection: ", italic("P"), "= 0.36")), size = 5) + 
+  geom_text(x = 1, y = 3.6, label = expression(paste("D x I: ", italic("P"), "= 0.99")), size = 5)
+
+repro_plot
+```
+
+How many of the 36 colonies produced offspring? 
+```{r}
+offspring_alive <- offspring %>% 
+  filter(alive_LPM > 0)
+
+19/36 
+# 52.8% 
+```
+
+How many produced offspring that were dead by the time they were dissected? 
+```{r}
+offspring_dead <- offspring %>% 
+  filter(dead_LPM >0)
+
+16/36 # had some dead, 10 of these also had some that lived, 6 of these only had dead offsprin g
+6/36 #16.7%
+```
+
+How many produced zero offspring 
+```{r}
+offspring_none <- offspring %>% 
+  filter(LPM == 0)
+```
+
+### 2nd response: days until first egg 
+
+#### Exploration
+
+```{r}
+hist(offspring$days) # poisson distribution? maybe we should remove outlier? 
+mean(offspring$days)
+boxplot(days ~ Diet*Infection, data = offspring)
+boxplot(days ~ Colony_ID, data = offspring)
+sd(offspring$days)
+34/sd(offspring$days)
+```
+#### Remove Outlier (23) 
+```{r}
+#remove outlier 
+offspring_days_subset <- offspring %>% 
+  filter(days < 30)
+```
+
+#### Explore data  
+```{r}
+hist(offspring_days_subset$days)
+boxplot(days ~ Diet*Infection, data = offspring_days_subset)
+boxplot(days ~ Colony_ID, data = offspring_days_subset)
+class(offspring_days_subset$days)
+```
+
+Look at raw means w/o outlier 
+```{r}
+sun <- offspring_days_subset %>% 
+  filter(Diet == "50-50")
+mean(sun$days)
+
+wf <- offspring_days_subset %>% 
+  filter(Diet == "WF")
+mean(wf$days)
+
+sun.i <- sun %>% 
+  filter(Infection == "Infected")
+mean(sun.i$days) 
+
+# sunflower infected = 9.6
+
+sun.u <- sun %>% 
+  filter(Infection == "Uninfected")
+mean(sun.u$days) 
+
+# sunflower uninfected = 5.2
+
+wf.i <- wf %>% 
+  filter(Infection == "Infected")
+mean(wf.i$days) 
+
+# wf infected = 7.3
+
+wf.u <- wf %>% 
+  filter(Infection == "Uninfected")
+mean(wf.u$days) 
+
+# wf uninfected = 10.5
+```
+
+Look at raw means w outlier 
+```{r}
+sun2 <- offspring %>% 
+  filter(Diet == "50-50")
+mean(sun2$days)
+
+wf2 <- offspring %>% 
+  filter(Diet == "Wildflower")
+mean(wf2$days)
+
+sun.i2 <- sun2 %>% 
+  filter(Infection == "Infected")
+mean(sun.i2$days) 
+
+# sunflower infected = 9.3
+
+sun.u2 <- sun2 %>% 
+  filter(Infection == "Uninfected")
+mean(sun.u2$days) 
+
+# sunflower uninfected = 8.875
+
+wf.i2 <- wf2 %>% 
+  filter(Infection == "Infected")
+mean(wf.i2$days) 
+
+# wf infected = 8.27
+
+wf.u2 <- wf2 %>% 
+  filter(Infection == "Uninfected")
+mean(wf.u2$days) 
+
+# wf uninfected = 9.625
+```
+
+#### Models  
+```{r}
+days_mod <- glm(days ~ Diet*Infection, 
+                data = offspring_days_subset, 
+                family = Gamma,
+                contrasts = list(Diet = contr.sum,
+                                 Infection = contr.sum))
+
+days_mod2 <- lm(days ~ Diet*Infection, 
+                data = offspring_days_subset,
+                contrasts = list(Diet = contr.sum,
+                                 Infection = contr.sum))
+
+days_mod3 <- glmer(days ~ Diet*Infection + (1|Colony_ID), 
+                data = offspring_days_subset, 
+                family = Gamma,
+                contrasts = list(Diet = contr.sum,
+                                 Infection = contr.sum)) #singular 
+
+AICtab(days_mod, days_mod2, days_mod3)
+```
+
+again, no RE did better 
+
+```{r}
+# look at residuals, model diagnostic, and output (no RE)
+hist(days_mod$residuals)
+plot(days_mod)
+simresid <- simulateResiduals(days_mod, plot = T)  # looks good
+summary(days_mod)
+Anova(days_mod, type = "III")
+```
+
+```{r}
+# look at residuals, model diagnostic, and output (yes RE)
+plot(days_mod3)
+simresid <- simulateResiduals(days_mod3, plot = T)  # not good! 
+summary(days_mod3)
+Anova(days_mod3, type = "III")
+```
+
+#### Plot using days_mod
+```{r}
+means <- emmeans(days_mod, ~ Diet*Infection, type = "response")
+days.means.to.plot<-as.data.frame(summary(means))
+days.means.to.plot$upperSE <- days.means.to.plot$response + days.means.to.plot$SE
+days.means.to.plot$lowerSE <- days.means.to.plot$response - days.means.to.plot$SE
+days.means.to.plot
+```
+
+```{r}
+days_plot<-ggplot(days.means.to.plot, aes(x=Diet, group = Infection,
+                                   y=days.means.to.plot$response, 
+                                   ymin=days.means.to.plot$lowerSE,
+                                   ymax=days.means.to.plot$upperSE)) + 
+  theme_classic()+
+  geom_point(stat="identity",
+             aes(color = Diet,
+                 shape = Infection), 
+             size = 5.5, 
+             position = position_dodge(width=0.075)) +
+  scale_color_manual(values=c("goldenrod1", "royalblue3")) +
+  scale_shape_manual(values=c(15, 16)) + 
+  geom_line(position = position_dodge(width=0.075)) +
+  ylab("Days until first egg laid") +
+  geom_errorbar(width=0.05,position=position_dodge(width = 0.075))+
+  theme(axis.text.x = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.00, 
+                                   hjust = 0.5,
+                                   colour = "black"),
+        axis.text.y = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.00, 
+                                   hjust = 0.5,
+                                   colour = "black"),
+        text = element_text(size=18),
+        axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  scale_x_discrete(labels = c("50% SF", "Wildflower")) +
+  geom_text(x = 1, y = 11.5, label = expression(paste("Diet: ", italic("P"), "= 0.13")), size = 5) + 
+  geom_text(x = 1, y = 11, label = expression(paste("Infection: ", italic("P"), "= 0.17")), size = 5) + 
+  geom_text(x = 1, y = 10.5, label = expression(paste("D x I: ", italic("P"), "= 0.03")), size = 5) + 
+  theme(legend.position = "bottom") +
+  guides(color = FALSE)
+        
+ # geom_signif(comparisons=list(c("50-50", "WF")), 
+#              annotation = "NS",
+#              y_position = 12.5, 
+#              tip_length = 0, 
+#              vjust=0,
+#              textsize = 6)
+
+days_plot
+```
+
+### 3rd response: average offspring weight 
+
+#### Set up and exploration 
+
+```{r, message = F}
+weights <- read_csv("2017_micro_alive_offspring_weights.csv")
+
+# remove colony 63
+weights <- weights %>% 
+  filter(Micro != 63)
+
+# make a new column where we're going to put diets 
+weights<-weights %>% 
+  mutate(Diet = grepl("50", weights$Treatment, fixed = T))
+# right now, it says TRUE if it was 50, and FALSE if it was K 
+# now replace those words with our diets 
+weights$Diet <- replace(weights$Diet, weights$Diet=="TRUE", "50% Sunflower")
+weights$Diet <- replace(weights$Diet, weights$Diet=="FALSE", "Wildflower")
+
+# do the same for infection 
+weights<-weights %>% 
+  mutate(Infection = grepl("I", weights$Treatment, fixed = T))
+# now replace those words with infected or not 
+weights$Infection <- replace(weights$Infection, weights$Infection=="TRUE", "Infected")
+weights$Infection <- replace(weights$Infection, weights$Infection=="FALSE", "Uninfected")
+
+# make things factors
+weights$Treatment <-as.factor(weights$Treatment)
+weights$Diet <-as.factor(weights$Diet)
+weights$Infection <-as.factor(weights$Infection)
+
+# rename microcolony
+weights <- weights %>% 
+  rename("Microcolony" = "Micro")
+
+weights_dur <- merge(duration, weights, by= "Microcolony")
+```
+
+```{r}
+summary(weights$Treatment)
+boxplot(weight ~ Diet*Infection, data = weights) 
+hist(weights$weight)
+
+ggplot(weights_dur, aes(x = DURATION, y = weight)) + 
+  geom_point(aes(color = Treatment)) + 
+  geom_smooth(method='lm') + 
+  xlab("Duration") + 
+  ylab("Weight of offspring") 
+
+ggplot(offspring_dur, aes(x = DURATION, y = av_lpweight)) + 
+  geom_point(aes(color = Treatment)) + 
+  geom_smooth(method='lm') + 
+  xlab("Duration") + 
+  ylab("Average weight of offspring") 
+```
+
+#### Models
+
+Use each offspring as an observation 
+
+```{r}
+weight_mod <- lmer(weight ~ Diet*Infection + (1|Microcolony), 
+                   contrasts = list(Diet = contr.sum,
+                                 Infection = contr.sum),
+                   data = weights)
+simresid <- simulateResiduals(weight_mod, plot = T) # looks alright
+plot(weight_mod)
+```
+
+```{r}
+Anova(weight_mod, type = "III") 
+```
+
+```{r}
+weight_mod2 <- glmer(weight ~ Diet*Infection + (1|Microcolony), data = weights, family = Gamma)
+simresid <- simulateResiduals(weight_mod2, plot = T) # error 
+plot(weight_mod2)
+```
+
+```{r}
+AICtab(weight_mod, weight_mod2) # weight_mod does better 
+```
+
+```{r}
+weight_mod3 <- lm(weight ~ Diet*Infection, 
+                   contrasts = list(Diet = contr.sum,
+                                 Infection = contr.sum),
+                   data = weights)
+simresid <- simulateResiduals(weight_mod3, plot = T) # looks alright 
+plot(weight_mod3)
+```
+
+```{r}
+AICtab(weight_mod, weight_mod3) # weight_mod still does better 
+```
+
+going with weight_mod
+
+but first see if adding duration improves
+
+```{r}
+weight_mod4 <- lmer(weight ~ Diet*Infection + DURATION + (1|Microcolony), 
+                   contrasts = list(Diet = contr.sum,
+                                 Infection = contr.sum),
+                   data = weights_dur)
+
+AICtab(weight_mod, weight_mod4) # it improves it just slightly  
+```
+
+```{r}
+simulateResiduals(weight_mod4, plot = T) # but...this is wacky? prob should not use this
+plot(weight_mod4)
+testResiduals(weight_mod4)
+Anova(weight_mod4, type = "III")
+```
+
+so lets stick with weight_mod
+
+#### Plot - supplementary figure 2 
+
+```{r}
+weight.means <- emmeans(weight_mod, ~ Diet*Infection, type = "response")
+weight.means.to.plot<-as.data.frame(summary(weight.means))
+weight.means.to.plot$upperSE <- weight.means.to.plot$emmean + weight.means.to.plot$SE
+weight.means.to.plot$lowerSE <- weight.means.to.plot$emmean - weight.means.to.plot$SE
+weight.means.to.plot
+```
+
+```{r}
+figS2<- ggplot(weight.means.to.plot, aes(x=Diet, group = Infection,
+                                   y=weight.means.to.plot$emmean, 
+                                   ymin=weight.means.to.plot$lowerSE,
+                                   ymax=weight.means.to.plot$upperSE)) + 
+  theme_bw()+
+  geom_point(stat="identity",
+             aes(color = Diet,
+                 shape = Infection), 
+             size = 5.5, 
+             position = position_dodge(width=0.075)) +
+  scale_color_manual(values=c("goldenrod1", "royalblue3")) +
+  scale_shape_manual(values=c(17, 18)) + 
+  geom_line(position = position_dodge(width=0.075)) +
+  ylab("Average weight of larvae & pupae") +
+  geom_errorbar(width=0.025,position=position_dodge(width = 0.075))+
+  theme(axis.text.x = element_text(face = "plain", 
+                                   size = 18,
+                                   vjust = 0.99, 
+                                   hjust = 0.5,
+                                   colour = "black"), 
+        axis.text.y = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.00, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=18))+
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)))+
+  theme(axis.title.x = element_text(size=18))  + 
+  guides(color = FALSE) + 
+  geom_text(x = 2, y = 145, label = expression(paste("Diet: ", italic("P"), "= 0.075")), size = 5) + 
+  geom_text(x = 2, y = 135, label = expression(paste("Infection: ", italic("P"), "= 0.32")), size = 5) + 
+  geom_text(x = 2, y = 125, label = expression(paste("D x I: ", italic("P"), "= 0.89")), size = 5)
+```
+
+### 4th response: honey pots produced 
+
+```{r}
+boxplot(HP ~ Diet*Infection, data=offspring)
+boxplot(HP ~ Colony_ID, data = offspring)
+boxplot(HP ~ Microcolony, data = offspring)
+
+ggplot(offspring_dur, aes(x = DURATION, y = HP)) + 
+  geom_point(aes(color = Treatment)) + 
+  geom_smooth(method='lm') + 
+  xlab("Duration") + 
+  ylab("Number of honey pots") 
+```
+
+```{r}
+hist(offspring$HP)
+```
+
+```{r}
+hp_mod <- glmer(HP ~ Diet*Infection + (1|Colony_ID), 
+                data = offspring, 
+                family = poisson,
+                contrasts = list(Diet = contr.sum,
+                                 Infection = contr.sum))
+
+hp_mod2 <- glm(HP ~ Diet*Infection, 
+               data = offspring, 
+               family = poisson,
+                contrasts = list(Diet = contr.sum,
+                                 Infection = contr.sum))
+
+AICtab(hp_mod, hp_mod2)
+
+hp_mod3 <- glm(HP ~ Diet*Infection + DURATION, 
+               data = offspring_dur, 
+               family = poisson,
+                contrasts = list(Diet = contr.sum,
+                                 Infection = contr.sum))
+AICtab(hp_mod2, hp_mod3)
+```
+
+```{r}
+hist(hp_mod2$residuals)
+simresid <- simulateResiduals(hp_mod2, plot = T) # looks good 
+plot(hp_mod2)
+```
+
+```{r}
+Anova(hp_mod2, type = "III")
+```
+
+## Arrange counts, days, and offspring plots to make figure 4
+```{r}
+fig4 <- ggarrange(days_plot,
+                  repro_plot,
+                  micro_counts_plot,
+                  labels = c("A", "B", "C"),
+                  ncol = 3, nrow = 1,
+                  common.legend = T,
+                  legend = "bottom")
+
+fig4
+```
+
+## FOURTH ANALYSIS: Consumption 
+
+NOTES ABOUT "New" and "Old": 
+New = fresh pollen *before* giving it to the bee. AKA "pre" AKA "initial"  
+Old = gross pollen *after* allowing the bee to feed on it. AKA "post" AKA "final" 
+
+### Import consumption data 
+
+```{r, message = F}
+cons<-read_csv("2017 micro consumption.csv")
+
+# rename columns
+cons <- cons %>% 
+  rename(consumed = "Net Consumption") %>% 
+  rename(micro = "Microcolony #") %>% 
+  rename(number = "# of Bees") %>% 
+  rename(New_pollen = "New Pollen") %>% 
+  rename(Old = "Old Pollen")
+
+# remove the microcolonies that we don't include for the other analyses 
+cons<-cons %>%
+  filter(micro < 47) 
+
+# make things factors
+cons$micro <- as.factor(cons$micro)
+cons$Treatment <- as.factor(cons$Treatment)
+cons$Date <- as.factor(cons$Date)
+cons$Start_date <- as.factor(cons$Start_date)
+cons$Week_number <- as.factor(cons$Week_number)
+
+# add col for infection 
+cons<-cons %>% 
+  mutate(Infection = grepl("I", cons$Treatment, fixed = T))
+
+# now replace those words with infected or not 
+cons$Infection <- replace(cons$Infection, cons$Infection=="TRUE", "Infected")
+cons$Infection <- replace(cons$Infection, cons$Infection=="FALSE", "Uninfected")
+```
+
+#### Explore the consumption measurements  
+```{r}
+ggplot(cons, aes(x = Days_since_start,
+                  y = number)) + 
+  geom_point(aes(color = Start_date)) +
+  geom_line(aes(color = Start_date))
+
+ggplot(cons, aes(x = Days_since_start,
+                  y = number)) + 
+  geom_point(aes(color = micro)) 
+
+ggplot(cons, aes(x = Days_since_start,
+                  y = number)) + 
+  geom_point(aes(color = Diet)) 
+```
+
+We can see that the colonies from start date 8/1 were not measured after day 20. 
+Lets look at how many times each micro was measured. 
+
+```{r}
+summary(cons$micro)
+summary(cons$Treatment)
+```
+
+```{r}
+ggplot(cons, aes(x = Date,
+                  y = micro)) +
+  geom_point(aes(color = Diet)) 
+```
+
+```{r}
+hist(cons$number)
+hist(cons$Days_since_start)
+plot(cons$Start_date)
+```
+
+### Import evaporation data 
+
+```{r, message = F}
+evap <- read_csv("evap_calculations.csv")
+
+# rename cols 
+evap <- evap %>% 
+  rename(New_pollen = `New Pollen`) %>% 
+  rename(Net_evap = `Net Evap`)
+```
+
+```{r}
+boxplot(weight_lost ~ Treatment, data = evap) # wildflower pollen lost more weight to evaporation 
+hist(evap$weight_lost)
+```
+
+### Setting up the data 
+
+```{r}
+# First we need to make a column in our evap dataframe for the "old" values for the evaporation. 
+# Not sure why they are not in this version (they are in the original evaporation data sheet) but we can just subtract the net from the new value since we got the net value by subtracting the new-old.
+
+evap <- evap %>% 
+  mutate(Old = New_pollen - Net_evap)
+
+#Now we need to separate the two treatments. 
+evap_50 <- evap %>% 
+  filter(Treatment == "50/50")
+
+evap_wf <- evap %>% 
+  filter(Treatment == "K100")
+```
+
+```{r}
+#Now let's make a linear regression with the old & new weights with intercept constrained to zero for just the 50/50 treatment. 
+
+evap_50_lg <- lm(Old ~ New_pollen + 0, data = evap_50)
+#summary(evap_50_lg)
+```
+
+```{r}
+plot(Old ~ New_pollen + 0, data = evap_50) + abline(evap_50_lg)
+```
+
+```{r, message = F}
+# now take the actual values from the 50/50 microcolonies.
+cons_50 <- cons %>% 
+  filter(Diet == "SF")
+
+cons_50$New_pollen <- as.numeric(paste(cons_50$New_pollen))
+cons_50$Old <- as.numeric(paste(cons_50$Old))
+
+# now predict what those values should be after accounting for evaporation: 
+
+cons_50$predicted_new <- predict(evap_50_lg, newdata = cons_50, type = "response")
+
+#So now we use these predicted values as the new pollen weights. Now we subtract old weight from this to get amount consumed.  
+
+cons_50 <- cons_50 %>% 
+  mutate(new_consumed = predicted_new - Old)
+```
+
+```{r}
+hist(cons_50$new_consumed)
+plot(predicted_new ~ New_pollen, data = cons_50)
+plot(consumed ~ new_consumed, data = cons_50)
+```
+
+Do again with wildflower pollen subset 
+
+```{r}
+evap_wf_lg <- lm(Old ~ New_pollen + 0, data = evap_wf)
+#summary(evap_wf_lg)
+```
+
+```{r}
+plot(Old ~ New_pollen + 0, data = evap_wf) + abline(evap_wf_lg)
+```
+
+```{r, message = F}
+# now take the actual values from the WF microcolonies.
+cons_wf <- cons %>% 
+  filter(Diet == "WF")
+
+cons_wf$New_pollen <- as.numeric(paste(cons_wf$New_pollen))
+cons_wf$Old <- as.numeric(paste(cons_wf$Old))
+
+# now predict what those values should be after accounting for evaporation: 
+
+cons_wf$predicted_new <- predict(evap_wf_lg, newdata = cons_wf, type = "response")
+
+cons_wf <- cons_wf %>% 
+  mutate(new_consumed = predicted_new - Old)
+```
+
+```{r}
+hist(cons_wf$new_consumed)
+plot(predicted_new ~ New_pollen, data = cons_wf)
+plot(consumed ~ new_consumed, data = cons_wf)
+```
+
+Now combine wf and 50/50 datasets - this is now what we can use for the models   
+
+```{r}
+full_cons <- rbind(cons_50, cons_wf)
+```
+
+### Explore new dataset 
+
+```{r}
+# exploring treatment 
+boxplot(new_consumed ~ Treatment, data = full_cons)
+
+ggplot(full_cons, aes(x = Diet, y = new_consumed)) + 
+  geom_boxplot(aes(color = Infection))
+
+ggplot(data = full_cons) + 
+  geom_density(aes(x = new_consumed,
+                   fill= Treatment),
+               alpha = .2)
+```
+
+```{r}
+# exploring number of bees and days since start 
+
+plot(new_consumed ~ number, data = full_cons)
+plot(new_consumed ~ Days_since_start, data = full_cons)
+boxplot(new_consumed ~ Week_number, data = full_cons)
+plot(summary(full_cons$Week_number)) 
+
+hist(full_cons$Days_since_start)
+hist(full_cons$number)
+plot(full_cons$micro)
+
+ggplot(data = full_cons) + 
+  geom_density(aes(x = number,
+                   fill= Treatment),
+               alpha = .2)
+
+ggplot(data = full_cons) + 
+  geom_density(aes(x = Days_since_start,
+                   fill= Treatment),
+               alpha = .2)
+
+ggplot(full_cons, aes(x = Days_since_start,
+                  y = new_consumed)) + 
+  geom_line(aes(color = micro))
+
+ggplot(full_cons, aes(x = Days_since_start,
+                  y = new_consumed)) + 
+  geom_point(aes(color = Diet))
+
+ggplot(full_cons, aes(x = Days_since_start,
+                  y = new_consumed)) + 
+  geom_point(aes(color = number))
+```
+
+```{r}
+#exploring date measurements taken 
+
+plot(full_cons$Date)
+
+ggplot(full_cons, aes(x = Date,
+                  y = new_consumed)) + 
+  geom_point()
+```
+
+```{r}
+# test if things are correlated 
+corr <- c("Days_since_start", "number", "new_consumed", "Week_number")
+pairs.panels(full_cons[,corr], scale= TRUE, method="spearman")
+```
+
+### Models 
+
+#### First with normal dist - NOT using gamma is better 
+
+```{r}
+hist(full_cons$new_consumed)
+
+full_mod <- glmmTMB(new_consumed ~ 
+                      Diet * 
+                      Infection + 
+                      Week_number + 
+                      number + 
+                      (1|Start_date/micro),
+                    data = full_cons)
+
+full_mod2 <- lmer(new_consumed ~ 
+                    Diet *
+                    Infection + 
+                    Week_number + 
+                    number +
+                    (1|micro) + 
+                    (1|Start_date/micro),
+                  data = full_cons)
+
+simresid <- simulateResiduals(full_mod, plot = T)
+simresid <- simulateResiduals(full_mod2, plot = T)
+```
+
+compare full_mod2 to one without RE 
+```{r}
+# remove start date RE 
+full_mod3 <- lmer(new_consumed ~ 
+                    Diet *
+                    Infection + 
+                    Days_since_start + 
+                    number +
+                    (1|micro),
+                  data = full_cons)
+
+# remove micro RE
+full_mod4 <- lmer(new_consumed ~ 
+                    Diet *
+                    Infection + 
+                    Days_since_start + 
+                    number +
+                    (1|Start_date),
+                  data = full_cons)
+
+# remove both REs
+full_mod5 <- lm(new_consumed ~ 
+                    Diet *
+                    Infection + 
+                    #Days_since_start + 
+                    number,
+                  data = full_cons)
+
+AICtab(full_mod, full_mod2, full_mod3, full_mod4, full_mod5)
+```
+
+```{r}
+simresid <- simulateResiduals(full_mod5, plot = T)
+simresid <- simulateResiduals(gamma_3, plot = T)
+```
+
+```{r}
+# lets compare full_mod2 with taking out some of the covariates now 
+
+# remove number 
+full_mod6 <- lmer(new_consumed ~ 
+                    Diet *
+                    Infection + 
+                    Days_since_start + 
+                    (1|micro) + 
+                    (1|Start_date),
+                  data = full_cons)
+
+# remove days since start 
+full_mod7 <- lmer(new_consumed ~ 
+                    Diet *
+                    Infection + 
+                    number +
+                    (1|micro) + 
+                    (1|Start_date),
+                  data = full_cons)
+
+# remove both 
+full_mod8 <- lmer(new_consumed ~ 
+                    Diet *
+                    Infection +
+                    (1|micro) + 
+                    (1|Start_date),
+                  data = full_cons)
+
+AICtab(full_mod2, full_mod6, full_mod7, full_mod8)
+```
+
+```{r}
+simresid <- simulateResiduals(full_mod7, plot = T) # not the best 
+plot(full_mod7)
+```
+
+```{r}
+# compare mod 7 to the same but with glmmTMB 
+
+full_mod9 <- glmmTMB(new_consumed ~ 
+                    Diet *
+                    Infection + 
+                    number +
+                    (1|micro) + 
+                    (1|Start_date),
+                  data = full_cons)
+
+AICtab(full_mod7, full_mod9) # 7 is better 
+```
+
+#### Lets try the making everything positive and use gamma dist - this is what we are using!  
+
+```{r}
+# the most negative value is -9.11292294. We will add a value (9.113023) to that to make it positive (0.0001) and add 9.113023 to everything to keep the distribution the same. We'll call this new_consumed_2.
+
+full_cons <- full_cons %>% 
+  mutate(new_consumed_2 = new_consumed + 9.113023)
+```
+
+```{r}
+hist(full_cons$new_consumed_2)
+plot(new_consumed_2 ~ number, data = full_cons)
+boxplot(new_consumed_2 ~ Diet*Infection, data = full_cons)
+```
+
+```{r}
+gamma_mod <- glmer(new_consumed_2 ~ Diet * Infection + number + Week_number + (1|Start_date/micro),
+                   family = Gamma,
+                   data = full_cons,
+                   contrasts = list(Diet = contr.sum,Infection = contr.sum),
+                   control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1e5)))
+
+#Model failed to converge with max|grad| = 0.00452633 (tol = 0.002, component 1)Model is nearly unidentifiable: very large eigenvalue
+# - Rescale variables?
+```
+
+##### Optimizing the model 
+
+https://joshua-nugent.github.io/allFit/  
+
+```{r}
+diff_optims <- allFit(gamma_mod, maxfun = 1e5, parallel = 'multicore') 
+is.OK <- sapply(diff_optims, is, "merMod")
+diff_optims.OK <- diff_optims[is.OK]
+lapply(diff_optims.OK,function(x) x@optinfo$conv$lme4$messages)
+convergence_results <- lapply(diff_optims.OK,function(x) x@optinfo$conv$lme4$messages)
+working_indices <- sapply(convergence_results, is.null)
+
+if(sum(working_indices)==0){
+  print("No algorithms from allFit converged.")
+  print("You may still be able to use the results, but proceed with extreme caution.")
+  first_fit <- NULL
+} else {
+  first_fit <- diff_optims[working_indices][[1]]
+}
+first_fit
+```
+
+Apparently “NULL” is what we want to see here. 
+That means there were no error or warning messages when that particular algorithm was run.
+
+#### Output of gamma model
+```{r}
+plot(gamma_mod)
+summary(gamma_mod)
+Anova(gamma_mod, type = "III")
+#simresid <- simulateResiduals(gamma_mod, plot = T) # error ; produces NaN values 
+```
+
+
+#### Lets try other gamma models  
+
+```{r}
+# remove REs
+
+gamma_1 <- glmer(new_consumed_2 ~ Diet * Infection + number + Week_number + (1|Start_date),
+                   family = Gamma,
+                   data = full_cons,
+                   contrasts = list(Diet = contr.sum,Infection = contr.sum),
+                   control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1e5)))
+# failed to converge 
+
+gamma_2 <- glmer(new_consumed_2 ~ Diet * Infection + number + Week_number + (1|micro),
+                   family = Gamma,
+                   data = full_cons,
+                   contrasts = list(Diet = contr.sum,Infection = contr.sum),
+                   control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1e5)))
+# failed to converge 
+
+gamma_3 <- glm(new_consumed_2 ~ Diet * Infection + number + Week_number,
+                   family = Gamma,
+                   data = full_cons,
+                   contrasts = list(Diet = contr.sum,Infection = contr.sum))
+
+AICtab(gamma_mod, gamma_1, gamma_2, gamma_3)
+```
+
+```{r}
+# remove some covariates 
+
+# with nested REs 
+
+gamma_4 <- glmer(new_consumed_2 ~ Diet * Infection + number + (1|Start_date/micro),
+                   family = Gamma,
+                   data = full_cons,
+                   contrasts = list(Diet = contr.sum,Infection = contr.sum),
+                   control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1e5)))
+# model is nearly unidentifiable 
+
+gamma_5 <- glmer(new_consumed_2 ~ Diet * Infection + Week_number + (1|Start_date/micro),
+                   family = Gamma,
+                   data = full_cons,
+                   contrasts = list(Diet = contr.sum,Infection = contr.sum),
+                   control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1e5)))
+
+gamma_6 <- glmer(new_consumed_2 ~ Diet * Infection + (1|Start_date/micro),
+                   family = Gamma,
+                   data = full_cons,
+                   contrasts = list(Diet = contr.sum,Infection = contr.sum),
+                   control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1e5)))
+```
+
+```{r}
+# with just micro 
+
+gamma_7 <- glmer(new_consumed_2 ~ Diet * Infection + number + (1|micro),
+                   family = Gamma,
+                   data = full_cons,
+                   contrasts = list(Diet = contr.sum,Infection = contr.sum),
+                   control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1e5)))
+# model is nearly unidentifiable 
+
+gamma_8 <- glmer(new_consumed_2 ~ Diet * Infection + Week_number + (1|micro),
+                   family = Gamma,
+                   data = full_cons,
+                   contrasts = list(Diet = contr.sum,Infection = contr.sum),
+                   control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1e5)))
+
+gamma_9 <- glmer(new_consumed_2 ~ Diet * Infection + (1|micro),
+                   family = Gamma,
+                   data = full_cons,
+                   contrasts = list(Diet = contr.sum,Infection = contr.sum),
+                   control=glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=1e5)))
+
+AICtab(gamma_mod, gamma_1, gamma_2, gamma_3, gamma_4, gamma_5, gamma_6, gamma_7, gamma_8, gamma_9)
+```
+
+first model (gamma_mod) is the best but gamma_5 is the best that doesn't give us any convergence warnings 
+
+```{r}
+# simresid<- simulateResiduals(gamma_mod, plot = T)
+plot(gamma_mod)
+
+#simresid<- simulateResiduals(gamma_5, plot = T) # error again 
+plot(gamma_5) # looks good 
+
+Anova(gamma_mod)
+Anova(gamma_5)
+```
+
+#### Check for autocorrelation
+
+Resources: 
+
+https://cran.r-project.org/web/packages/glmmTMB/vignettes/covstruct.html 
+
+https://rawgit.com/bbolker/mixedmodels-misc/master/notes/corr_braindump.html 
+
+```{r}
+acf_gamma_mod <- glmmPQL(new_consumed_2 ~ Diet * Infection + number + Week_number, 
+              random = ~ 1|micro, 
+              data = full_cons, 
+              family = Gamma, 
+              correlation=corAR1()) # WORKS 
+
+plot(ACF(acf_gamma_mod), alpha=0.05)
+plot(acf_gamma_mod)
+summary(acf_gamma_mod)
+Anova(acf_gamma_mod)
+
+# check plot again without the AR1 structure
+
+acf_gamma_mod2 <- glmmPQL(new_consumed_2 ~ Diet * Infection + number + Week_number, 
+              random = ~ 1|micro, 
+              data = full_cons, 
+              family = Gamma)  
+
+plot(ACF(acf_gamma_mod2), alpha=0.05)
+plot(acf_gamma_mod2)
+summary(acf_gamma_mod2)
+```
+
+```{r}
+# compare to lm with normal 
+
+noRE_lm <- lm(new_consumed ~ 
+                 Diet *
+                 Infection + 
+                 number +
+                 Start_date,
+               data = full_cons)
+
+AICtab(gamma_2, full_mod7, noRE_lm)
+
+simresid <- simulateResiduals(noRE_lm, plot = T)
+```
