@@ -1,0 +1,391 @@
+---
+title: "2020_imps"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    highlight: pygments
+---
+
+This R code is for analyzing the effect of pollen diet on Crithidia infection in wild Bombus impatiens workers for the manuscript titled: "Sunflower pollen reduces a gut pathogen in the model bee species, Bombus impatiens, but has weaker effects in three wild congeners"
+
+Authors: Alison Fowler*, Jonathan Giacomini, Sara June Connon, Becky Irwin, and Lynn Adler 
+Corresponding author*: aefowler@umass.edu 
+
+## Libraries 
+
+```{r, results = 'hide', message = FALSE, warning = FALSE}
+library(lattice)
+library(psych)
+library(car)
+library(AER)
+library(MASS)
+library(corrplot)
+library(AICcmodavg)
+library(dplyr)
+library(tidyr)
+library(lme4)
+library(mgcv)
+library(scatterplot3d)
+library(bbmle)
+library(emmeans)
+library(ggplot2)
+library(tidyverse)
+library(ggalt)
+library(multcomp)
+library(DHARMa)
+```
+
+## Get set up 
+
+```{r, message = F}
+imps20<- read_csv("CSV/2020_imp_counts.csv")
+
+imps20<- imps20 %>% 
+  dplyr::rename(Bee_ID = 'Bee ID') %>% 
+  dplyr::rename(Colony = 'Colony ID') %>% 
+  dplyr::rename(Date = "Date Inoc")
+
+# make treatment a factor
+imps20$Treatment <- as.factor(imps20$Treatment)
+
+# make colony ID a factor 
+imps20$Colony<-as.factor(imps20$Colony)
+
+# make date a factor 
+imps20$Date<-as.factor(imps20$Date)
+
+# reorder treatments 
+imps20$Treatment <- factor(imps20$Treatment, levels=c("SUN", "MIX", "WF"))
+
+#levels(imps20$Treatment)
+
+# rename treatments 
+levels(imps20$Treatment)[levels(imps20$Treatment) =="SUN"] <- "100% Sun"
+levels(imps20$Treatment)[levels(imps20$Treatment) =="MIX"] <- "50% Sun"
+levels(imps20$Treatment)[levels(imps20$Treatment) =="WF"] <- "Wildflower mix"
+
+# remove dead bees for count analysis   
+imps20<-imps20 %>% 
+  filter(Dead != '1')
+
+# replace lost wing values (NAs) with mean wing 
+imps20<- imps20 %>% 
+  mutate(wing = case_when(is.na(Wing_mm) ~ mean(Wing_mm, na.rm = TRUE), 
+                          TRUE ~ as.numeric(Wing_mm)
+                          )
+         )
+
+# add column for presence/absence 
+imps20$Presence <- NA
+
+for(i in 1:length(imps20$Count)){
+  if(imps20$Count[i] >=1) {
+    imps20$Presence[i] <- 1
+  } else {
+    imps20$Presence[i] <- 0
+  }
+}
+```
+
+## Counts 
+### Data exploration 
+
+```{r}
+summary(imps20$Date)
+summary(imps20$Colony)
+summary(imps20$Treatment)
+
+# counts by treatments 
+imps20 %>% 
+  ggplot(aes(x = Treatment, y = Count)) + 
+  geom_boxplot() + 
+  geom_point(alpha = 0.5)
+
+# counts by colonies 
+imps20 %>% 
+  ggplot(aes(x = Treatment, y = Count)) + 
+  geom_point(aes(color = Colony))
+
+imps20 %>% 
+  ggplot(aes(x = Colony, y = Count)) + 
+  geom_point(aes(color = Treatment))
+
+imps20 %>% 
+  ggplot(aes(x = Colony, y = Count)) + 
+  geom_boxplot() +
+  geom_point(aes(color = Treatment))
+
+imps20 %>% 
+  ggplot(aes(x = Date, y = Count)) + 
+  geom_boxplot()+
+  geom_point(aes(color = Treatment))
+
+# distribution of counts
+hist(imps20$Count)
+```
+
+### Intensity models  
+
+```{r}
+imp1<- glmer.nb(Count ~ Treatment + wing + (1|Colony) + (1|Date), data = imps20)
+imp2<- glmer.nb(Count ~ Treatment + wing + (1|Date), data = imps20)
+imp3<- glmer.nb(Count ~ Treatment + wing + (1|Colony), data = imps20)
+imp4<- glm.nb(Count ~ Treatment + wing, data = imps20)
+
+imp5<- glmer.nb(Count ~ Treatment + (1|Colony) + (1|Date), data = imps20)
+imp6<- glmer.nb(Count ~ Treatment + (1|Date), data = imps20)
+imp7<- glmer.nb(Count ~ Treatment + (1|Colony) , data = imps20)
+imp8<- glm.nb(Count ~ Treatment, data = imps20)
+
+AICtab(imp1,imp2,imp3,imp4,imp5,imp6,imp7,imp8)
+```
+
+```{r}
+plot(imp7)
+plot(imp3)
+plot(imp5)
+
+simresid <- simulateResiduals(imp7, plot = T)
+
+Anova(imp7)
+```
+
+### Intensity Plot
+
+```{r}
+imp_means<-emmeans(imp7, ~Treatment) 
+imp.20.means.to.plot<-as.data.frame(summary(imp_means))
+imp.20.means.to.plot$expmean<- exp(imp.20.means.to.plot$emmean)
+imp.20.means.to.plot$tfupper<-exp(imp.20.means.to.plot$emmean + imp.20.means.to.plot$SE)
+imp.20.means.to.plot$tlower<-exp(imp.20.means.to.plot$emmean - imp.20.means.to.plot$SE)
+exp.mean<-imp.20.means.to.plot$expmean
+imp.20.means.to.plot
+
+imp.lets<-cld(imp_means, Letters = c('a','b','c', 'd'), sort = FALSE)
+imp.letters<-dplyr::select(imp.lets, Treatment, .group)
+```
+
+```{r}
+imp_2020_plot<-
+  ggplot(imp.20.means.to.plot, aes(x=Treatment, group = Treatment,
+                          y=imp.20.means.to.plot$expmean, 
+                          ymin=imp.20.means.to.plot$tlower,
+                          ymax=imp.20.means.to.plot$tfupper)) + 
+  theme_classic()+
+  geom_point(stat="identity",
+             aes(color = Treatment),
+             size = 5) +
+  geom_errorbar(width=0.05, aes(color = Treatment))+
+  theme(axis.text.x = element_blank(), 
+        axis.text.y = element_text(face="plain",
+                                   size = 15,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=15))+
+  geom_text(aes (y = imp.20.means.to.plot$expmean, 
+                 label = imp.letters$.group), 
+            size = 5, hjust = 1.5) +
+  scale_color_manual(values = c("chocolate2", "goldenrod1", "royalblue3")) + 
+  guides(color = FALSE) +
+  theme(axis.title.x = element_blank()) + 
+  theme(axis.title.y = element_blank()) + 
+  ggtitle("")+ 
+  geom_text(x = 3.35, y = 77.5, label = "2020", size = 4) 
+```
+
+### Presence/Absence models 
+
+```{r}
+imps_presence <- glmer(Presence ~ Treatment + (1|Colony), family = binomial(link = "logit"), data = imps20)
+imps_presence2 <- glm(Presence ~ Treatment, family = binomial(link = "logit"), data = imps20)
+
+AICtab(imps_presence, imps_presence2)
+
+summary(imps_presence2)
+Anova(imps_presence2)
+```
+
+```{r}
+Treatment <- c("100% Sun", "50% Sun", "Wildflower mix")
+newdata <- data.frame(Treatment)
+newdata$dietP <- predict(imps_presence2, newdata = newdata, type = "response")
+newdata$inverse <- 1-newdata$dietP
+newdata
+```
+
+```{r}
+newdata2 <- cbind(newdata, predict(imps_presence2, newdata = newdata, type = "link", se = T))
+newdata2
+```
+
+```{r}
+newdata3 <- within(newdata2, {
+    PredictedProb <- plogis(fit)
+    LL <- plogis(fit - (1.96 * se.fit)) # this translates to a 95% CI  
+    UL <- plogis(fit + (1.96 * se.fit))
+})
+
+newdata3
+```
+
+## Mortality 
+
+```{r}
+# make a survival object
+event <- imps20$Dead
+time <- imps20$days_til_dead
+survival <- Surv(time, event)
+```
+
+```{r}
+# model survival as the response with the cox proportional hazards model 
+
+mimp1<- coxme(survival ~ Treatment + wing + (1|Colony) + (1|Date), data = imps20)
+mimp2<- coxme(survival ~ Treatment + wing + (1|Date), data = imps20)
+mimp3<- coxme(survival ~ Treatment + wing + (1|Colony), data = imps20)
+mimp4<- coxph(survival ~ Treatment + wing, data = imps20)
+
+mimp5<- coxme(survival ~ Treatment + (1|Colony) + (1|Date), data = imps20)
+mimp6<- coxme(survival ~ Treatment + (1|Date), data = imps20)
+mimp7<- coxme(survival ~ Treatment + (1|Colony) , data = imps20)
+mimp8<- coxph(survival ~ Treatment, data = imps20)
+
+mimp9<- coxph(survival ~ Treatment + wing + Colony, data=imps20)
+mimp10<- coxph(survival ~ Treatment + Colony, data=imps20)
+
+AICtab(mimp1,mimp2,mimp3,mimp4,mimp5,mimp6,mimp7,mimp8, mimp9, mimp10)
+```
+
+```{r}
+Anova(mimp7)
+```
+
+## Consumption
+
+did not measure evaporation
+
+```{r, message = F}
+imp_cons <- read_csv("CSV/wild_imps_2020_consumption.csv")
+
+imp_cons <- imp_cons %>% 
+  rename(New_pollen = `New pollen weight`) %>% 
+  rename(Old_pollen = `Old pollen weight`) %>% 
+  rename(New_sucrose = `New sucrose weight`) %>% 
+  rename(Old_sucrose = `Old sucrose weight`) %>% 
+  rename(Net_pollen = `Net pollen`) %>% 
+  rename(Net_sucrose = `Net sucrose`) %>% 
+  rename(Bee_ID = `Bee ID`)
+
+# remove bee # 56; it died 
+imp_cons <- imp_cons %>% 
+  filter(Bee_ID != "56")
+```
+
+```{r}
+imps_20_wings <- data.frame(imps20$Bee_ID, imps20$wing, imps20$Count)
+imps_20_wings <- imps_20_wings %>% 
+  rename(Bee_ID = imps20.Bee_ID) %>% 
+  rename(Wing = imps20.wing) %>% 
+  rename(Count = imps20.Count)
+```
+
+```{r}
+full_imp_cons <- merge(imp_cons, imps_20_wings, by = "Bee_ID")
+
+full_imp_cons <- full_imp_cons %>% 
+  rename(Colony_ID = `Colony ID`) 
+
+full_imp_cons$Treatment <- as.factor(full_imp_cons$Treatment)
+full_imp_cons$Colony_ID <- as.factor(full_imp_cons$Colony_ID)
+
+# rename diets 
+levels(full_imp_cons$Treatment)[levels(full_imp_cons$Treatment) =="MIX"] <- "50% Sunflower"
+levels(full_imp_cons$Treatment)[levels(full_imp_cons$Treatment) =="WF"] <- "Wildflower"
+levels(full_imp_cons$Treatment)[levels(full_imp_cons$Treatment) =="SUN"] <- "100% Sunflower"
+```
+
+```{r}
+boxplot(Net_pollen ~ Treatment, data = full_imp_cons)
+boxplot(Net_pollen ~ Colony_ID, data = full_imp_cons)
+boxplot(Net_sucrose ~ Treatment, data = full_imp_cons)
+boxplot(Net_pollen ~ `New date`, data = full_imp_cons)
+boxplot(Net_sucrose ~ `New date`, data = full_imp_cons)
+plot(Net_pollen ~ Wing, data = full_imp_cons)
+plot(Net_sucrose ~ Wing, data = full_imp_cons)
+hist(full_imp_cons$Net_pollen)
+hist(full_imp_cons$Net_sucrose)
+
+plot(Net_pollen~ Count, data = full_imp_cons)
+plot(Count~ Net_pollen, data = full_imp_cons, col = Treatment)
+
+figS3<- 
+  ggplot(full_imp_cons, aes(x = Net_pollen, y = Count,color = Treatment)) + 
+  geom_point(aes(color = Treatment), size = 4) + 
+  geom_smooth(method='lm', se = F, size = 1) +
+  xlab("Pollen consumed (g)") + 
+  ylab("Count") + 
+  theme_bw() + 
+  theme(text = element_text(size=18)) + 
+  scale_color_manual(values = c("goldenrod1", "chocolate2", "royalblue3"))
+
+ggplot(full_imp_cons, aes(x = Net_pollen, y = Count)) + 
+  geom_point(aes(color = Treatment)) + 
+  geom_smooth(method='lm', se = F, color = "black") +
+  xlab("Pollen consumed (g)") + 
+  ylab("Count") 
+```
+
+### Models 
+
+#### Pollen 
+```{r}
+imps_p_mod <- lmer(Net_pollen ~ Treatment + Wing + (1|Colony_ID) + (1|`New date`), data = full_imp_cons)
+imps_p_mod2 <- lm(Net_pollen ~ Treatment + Wing, data = full_imp_cons)
+imps_p_mod3 <- lmer(Net_pollen ~ Treatment + (1|Colony_ID), data = full_imp_cons)
+imps_p_mod4 <- lmer(Net_pollen ~ Treatment + (1|`New date`), data = full_imp_cons)
+imps_p_mod5 <- lm(Net_pollen ~ Treatment, data = full_imp_cons)
+
+AICtab(imps_p_mod, imps_p_mod2, imps_p_mod3, imps_p_mod4, imps_p_mod5)
+```
+
+```{r}
+# diagnostics 
+plot(imps_p_mod5)
+simresid <- simulateResiduals(imps_p_mod5, plot = T)
+
+# outputs 
+summary(imps_p_mod5)
+Anova(imps_p_mod5)
+summary(glht(imps_p_mod5,linfct=mcp(Treatment="Tukey")))
+```
+
+#### Sucrose 
+```{r}
+imps_s_mod <- lmer(Net_sucrose ~ Treatment + Wing_mm + (1|Colony_ID), data = full_imp_cons)
+imps_s_mod2 <- lm(Net_sucrose ~ Treatment + Wing_mm, data = full_imp_cons)
+imps_s_mod3 <- lmer(Net_sucrose ~ Treatment + (1|Colony_ID), data = full_imp_cons)
+imps_s_mod4 <- lm(Net_sucrose ~ Treatment, data = full_imp_cons)
+
+AICtab(imps_s_mod, imps_s_mod2, imps_s_mod3, imps_s_mod4)
+```
+
+```{r}
+plot(imps_s_mod2)
+simresid <- simulateResiduals(imps_s_mod2, plot = T)
+
+summary(imps_s_mod2)
+Anova(imps_s_mod2)
+```
+
+```{r}
+pollen_count_mod <- glm.nb(Count ~ Net_pollen, data = full_imp_cons)
+
+plot(pollen_count_mod)
+simresid <- simulateResiduals(pollen_count_mod, plot = T)
+summary(pollen_count_mod)
+```
+
+Pollen treatment is significant. Sucrose non-significant. 

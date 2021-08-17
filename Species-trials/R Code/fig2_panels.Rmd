@@ -1,0 +1,26 @@
+---
+title: "fig2"
+author: "Alison Fowler"
+date: "6/22/2021"
+output: html_document
+---
+
+```{r}
+library(ggpubr)
+```
+
+# Use this 
+```{r}
+fig2 <- 
+  ggarrange(imp_2016_plot,
+            imp_2020_plot,
+            gris_2016_plot,
+            gris_2017_plot,
+            bim_2018_plot,
+            bim_2017_plot,
+            vagans_plot,
+            NULL,
+            ncol = 2, nrow = 4,
+            align = "v")
+fig2
+```
