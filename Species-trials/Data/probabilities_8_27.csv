@@ -1,0 +1,20 @@
+﻿Species,Diet,Prob.1,UL.1,LL.1
+B. impatiens (2016; Commercial),100% Sunflower,0.222,0.579,0.056
+B. impatiens (2016; Commercial),Control,0.875,0.983,0.463
+B. impatiens (2016; Wild),100% Sunflower,1,1,1
+B. impatiens (2016; Wild),Control,1,1,1
+B. impatiens (2020),100% Sunflower,0.4444444,0.6308724,0.2724459
+B. impatiens (2020),50% Sunflower,0.6428571,0.7958931,0.45382
+B. impatiens (2020),Control,0.9259259,0.9814038,0.7475202
+B. griseocollis (2016),100% Sunflower,1,1,1
+B. griseocollis (2016),Control,1,1,1
+B. griseocollis (2017),100% Sunflower,0.9108061,0.9108061,0.1918838
+B. griseocollis (2017),50% Sunflower,0.8031981,0.8031981,0.1017095
+B. griseocollis (2017),Control,0.9839147,0.9839147,0.5498891
+B. bimaculatus (2017),100% Sunflower,0.8888889,0.9846071,0.5001369
+B. bimaculatus (2017),50% Sunflower,0.8333333,0.9580189,0.5227913
+B. bimaculatus (2017),Control,0.9090909,0.987361,0.5614182
+B. bimaculatus (2018),100% Sunflower,0.787,0.946,0.437
+B. bimaculatus (2018),Control,0.926,0.649,0.986
+B. vagans (2018),100% Sunflower,0.7,0.8585963,0.472756
+B. vagans (2018),Control,0.9583333,0.9941605,0.7565286
