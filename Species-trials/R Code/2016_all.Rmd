@@ -1,0 +1,421 @@
+---
+title: "2016 experiment"
+author: "Alison Fowler"
+date: "11/17/2020"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 5
+---
+
+This R code is for analyzing the effect of pollen diet on Crithidia infection in wild Bombus griseocollis and Bombus bimaculatus workers for the manuscript titled: "Sunflower pollen reduces a gut pathogen in the model bee species, Bombus impatiens, but has weaker effects in three wild congeners"
+
+Authors: Alison Fowler*, Jonathan Giacomini, Sara June Connon, Becky Irwin, and Lynn Adler 
+Corresponding author*: aefowler@umass.edu 
+
+## Libraries 
+
+```{r, results = 'hide', message = FALSE, warning = FALSE}
+library(lattice)
+library(psych)
+library(car)
+library(AER)
+library(MASS)
+library(corrplot)
+library(AICcmodavg)
+library(plyr)
+library(dplyr)
+library(tidyr)
+library(lme4)
+library(mgcv)
+library(scatterplot3d)
+library(bbmle)
+library(emmeans)
+library(ggplot2)
+library(tidyverse)
+library(ggalt)
+library(multcomp)
+library(coxme) # for survival analyses with cox proportional hazards mixed model 
+library(survival) # for survival analyses with survfit and Surv functions 
+library(DHARMa)
+library(aod) # wald test 
+library(pscl) # interpreting binomial model output 
+```
+
+## Set up 
+
+```{r, message = FALSE}
+bees <- read_csv("CSV/2016_singles_all_spp.csv")
+```
+
+```{r}
+# make treat a factor 
+bees$Treatment<-as.factor(bees$Treatment)
+
+# make spp a factor 
+bees$species<-as.factor(bees$species)
+
+# reorder species 
+bees$species<- factor(bees$species, levels=c("Com imp", "Wild imp", "Wild gris"))
+
+# rename levels of diet - just make new column actually 
+bees <- bees %>% 
+  mutate(Diet = grepl("S", bees$Treatment, fixed = T))
+# right now, it says TRUE if it was S, and FALSE if it was B 
+# now replace those words with our diets 
+bees$Diet <- replace(bees$Diet, bees$Diet=="TRUE", "SF")
+bees$Diet <- replace(bees$Diet, bees$Diet=="FALSE", "BW")
+
+# reorder diets 
+bees$Diet<- factor(bees$Diet, levels=c("SF", "BW"))
+
+# rename species levels 
+levels(bees$species)
+bees$Species <- revalue(bees$species, c(
+  "Com imp"="Commercial B. impatiens",
+  "Wild imp"="Wild B. impatiens",
+  "Wild gris"="Wild B. griseocollis"))
+levels(bees$Species)
+```
+
+```{r}
+# remove dead 
+bees_alive <- bees %>%
+  filter(!is.na(count))
+```
+
+## Count analysis, all three "species" together, zeros and non-zero counts all together 
+
+### Data Exploration 
+
+```{r}
+summary(bees$Treatment)
+summary(bees$species)
+
+summary(bees_alive$Treatment)
+summary(bees_alive$species)
+
+boxplot(count ~ Treatment*species, data=bees_alive)
+
+hist(bees_alive$count)
+
+plot(count ~ wing, data=bees_alive)
+
+boxplot(wing ~ Species, data = bees) # bee size correlated with species - griseocollis are bigger. 
+plot(wing ~ count, data = bees)
+```
+
+### Model Selection 
+
+```{r}
+mod2016 <- glm.nb(count ~ Diet*Species + wing, data = bees)
+mod2016_2 <- glm.nb(count ~ Diet*Species, data = bees)
+mod2016_3 <- glm.nb(count ~ Diet + Species + wing, data = bees)
+mod2016_4 <- glm.nb(count ~ Diet + Species, data = bees)
+
+AICtab(mod2016, mod2016_2, mod2016_3, mod2016_4)
+```
+
+Model validation: 
+```{r}
+summary(mod2016)
+par(mfrow=c(2,2))
+plot(mod2016)
+simresid <- simulateResiduals(mod2016, plot = T) # not great 
+```
+
+Lets look at model 2 
+```{r}
+simresid <- simulateResiduals(mod2016_2, plot = T) # better.... not perfect but better. 
+# and excluding wing makes sense since it is confounded with species 
+hist(mod2016_2$residuals)
+```
+
+```{r}
+Anova(mod2016_2, type = "III")
+```
+
+## Logistic regression for probability of getting infected - all 3 bee groups together 
+
+```{r}
+# add a column for present/absent 
+
+bees_alive$Presence <- NA
+
+for(i in 1:length(bees_alive$count)){
+  if(bees_alive$count[i] >=1) {
+    bees_alive$Presence[i] <- 1
+  } else {
+    bees_alive$Presence[i] <- 0
+  }
+} 
+```
+
+Model 
+```{r}
+presence_mod <- glm(Presence ~ Diet * Species, family = binomial(link = "logit"), data = bees_alive)
+```
+
+```{r}
+summary(presence_mod)
+Anova(presence_mod)
+```
+
+
+## B. impatiens alone 
+
+```{r}
+imps16 <- bees_alive %>% 
+  filter(species != "Wild gris")
+```
+
+### Model 
+
+We're not going to include colony as a random effect because its confounded with 'species' - wild imps were all from the same colony. commercial imps came 3 colonies, which is less than 5 levels anyway so don't include. 
+
+```{r}
+hist(imps16$count)
+imps.mod <- glm.nb(count ~ Diet*Species + wing, data = imps16)
+imps.mod2 <- glm.nb(count ~ Diet + Species + wing, data = imps16)
+imps.mod3 <- glm.nb(count ~ Diet * Species, data = imps16)
+imps.mod4 <- glm.nb(count ~ Diet + Species, data = imps16)
+
+AICtab(imps.mod, imps.mod2, imps.mod3, imps.mod4)
+```
+
+```{r}
+simresid <- simulateResiduals(imps.mod3, plot = T)
+```
+
+```{r}
+simresid <- simulateResiduals(imps.mod, plot = T)
+```
+
+```{r}
+simresid <- simulateResiduals(imps.mod4, plot = T)
+```
+
+```{r}
+simresid <- simulateResiduals(imps.mod2, plot = T)
+```
+
+```{r}
+Anova(imps.mod3)
+```
+
+### Plot Impatiens 
+
+```{r}
+imp16_means<-emmeans(imps.mod3, ~Diet*Species, type = "response") 
+imp.means.to.plot<-as.data.frame(summary(imp16_means))
+imp.means.to.plot
+
+imp.means.to.plot$mean<- imp.means.to.plot$response
+imp.means.to.plot$upper<-imp.means.to.plot$mean + imp.means.to.plot$SE
+imp.means.to.plot$lower<-imp.means.to.plot$mean - imp.means.to.plot$SE
+imp.means.to.plot
+
+imp16.lets<-cld(imp16_means, Letters = c('a','b','c', 'd'), sort = FALSE)
+imp16.lets
+imp16.letters<-dplyr::select(imp16.lets, Diet, .group)
+imp16.letters
+
+#mod2016.letters$letters <- factor(c(" a ", " b ", " b ", " c ", "bc", "bc")) # because the spacing is annoying 
+#mod2016.letters
+```
+
+```{r}
+imp_2016_plot<-
+  ggplot(imp.means.to.plot, aes(x=Diet, group = Diet,
+                          y=mean, 
+                          ymin=lower,
+                          ymax=upper)) + 
+  theme_classic()+
+  geom_point(stat="identity",
+             aes(color = Diet,
+                 shape = Species),
+             size = 5) +
+  geom_errorbar(width=0.05, aes(color = Diet))+
+  theme(axis.text.x = element_blank(), 
+        axis.text.y = element_text(face="plain",
+                                   size = 15,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=15))+
+  geom_text(aes (y = imp.means.to.plot$mean, 
+                 label = imp16.letters$.group), 
+            size = 5, hjust = 1.5) +
+  scale_shape_manual("Origin",
+                     labels = c("Commercial",
+                                "Wild"),
+                     values = c(15,17),
+                     guide = "legend") + 
+  scale_color_manual(values = c("chocolate2", "royalblue3")) + 
+  guides(color = FALSE) +
+  theme(legend.position = c(0.3, 0.75)) + 
+  theme(axis.title.x = element_blank()) + 
+  theme(axis.title.y = element_blank()) + 
+  ggtitle(expression(paste(italic("B. impatiens")))) +
+  geom_text(x = 2.35, y = 403, label = "2016", size = 4)
+
+```
+
+### Presence/absence 
+
+Wild imps didn't have any bees with counts of 0. lets just look at commercial impatiens.
+
+#### Look at just commercial bees 
+```{r}
+comm_imps <- imps16 %>% 
+  filter(Species == "Commercial B. impatiens")
+
+comm_imps_presence_mod <- glm(Presence ~ Diet, family = binomial(link = "logit"), data = comm_imps)
+
+comm_imps_presence_mod2 <- glm(Presence ~ Diet + wing, family = binomial(link = "logit"), data = comm_imps)
+
+AICtab(comm_imps_presence_mod, comm_imps_presence_mod2)
+
+summary(comm_imps_presence_mod)
+Anova(comm_imps_presence_mod)
+```
+
+```{r}
+Diet <- c("BW", "SF")
+Species <- c("Commercial B. impatiens","Commercial B. impatiens")
+newdata_comm <- data.frame(Species, Diet)
+newdata_comm$dietP <- predict(comm_imps_presence_mod, newdata = newdata_comm, type = "response")
+newdata_comm
+```
+
+```{r}
+newdata_comm_2 <- cbind(newdata_comm, predict(comm_imps_presence_mod, newdata = newdata_comm, type = "link", se = T))
+newdata_comm_2
+```
+
+```{r}
+newdata_comm_3 <- within(newdata_comm_2, {
+    PredictedProb <- plogis(fit)
+    LL <- plogis(fit - (1.96 * se.fit)) # this translates to a 95% CI  
+    UL <- plogis(fit + (1.96 * se.fit))
+})
+
+newdata_comm_3
+```
+
+## B. griseocollis alone 
+
+```{r}
+gris16 <- bees_alive %>% 
+  filter(species == "Wild gris")
+```
+
+### Model 
+
+```{r}
+hist(gris16$count)
+gris.mod <- glm.nb(count ~ Diet + wing, data = gris16)
+gris.mod2 <- glm.nb(count ~ Diet, data = gris16)
+
+AICtab(gris.mod, gris.mod2)
+```
+
+```{r}
+plot(gris.mod)
+simresid <- simulateResiduals(gris.mod, plot = T)
+```
+
+```{r}
+Anova(gris.mod)
+```
+
+### Plot Griseocollis 
+
+```{r}
+gris16_means<-emmeans(gris.mod, ~Diet, type = "response") 
+gris.means.to.plot<-as.data.frame(summary(gris16_means))
+gris.means.to.plot
+
+gris.means.to.plot$mean<- gris.means.to.plot$response
+gris.means.to.plot$upper<-gris.means.to.plot$mean + gris.means.to.plot$SE
+gris.means.to.plot$lower<-gris.means.to.plot$mean - gris.means.to.plot$SE
+gris.means.to.plot
+
+gris16.lets<-cld(gris16_means, Letters = c('a','b','c', 'd'), sort = FALSE)
+gris16.lets
+gris16.letters<-dplyr::select(gris16.lets, Diet, .group)
+gris16.letters
+
+#mod2016.letters$letters <- factor(c(" a ", " b ", " b ", " c ", "bc", "bc")) # because the spacing is annoying 
+#mod2016.letters
+```
+
+PLOT FOR GRIS: 
+
+```{r}
+gris_2016_plot<-
+  ggplot(gris.means.to.plot, aes(x=Diet, group = Diet,
+                          y=mean, 
+                          ymin=lower,
+                          ymax=upper)) + 
+  theme_classic()+
+  geom_point(stat="identity",
+             aes(color = Diet),
+             size = 5) +
+  geom_errorbar(width=0.05, aes(color = Diet))+
+  theme(axis.text.x = element_blank(), 
+        axis.text.y = element_text(face="plain",
+                                   size = 15,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=15))+
+  scale_color_manual(values = c("chocolate2", "royalblue3")) + 
+  guides(color = FALSE) +
+  theme(legend.position = "right") + 
+  theme(axis.title.x = element_blank()) + 
+  theme(axis.title.y = element_blank()) + 
+  ggtitle(expression(paste(italic("B. griseocollis ")))) + 
+  geom_text(x = 2.35, y = 357.5, label = "2016", size = 4) 
+#  theme(plot.title = element_text(hjust = 0.5))
+```
+
+### Presence/Absence 
+
+```{r}
+gris_presence_mod <- glm(Presence ~ Diet, family = binomial(link = "logit"), data = gris16)
+gris_presence_mod2 <- glm(Presence ~ Diet + wing, family = binomial(link = "logit"), data = gris16)
+AICtab(gris_presence_mod, gris_presence_mod2)
+```
+
+```{r}
+summary(gris_presence_mod)
+Anova(gris_presence_mod)
+```
+
+## Mortality 
+
+```{r}
+# make a survival object
+event <- bees$Dead
+time<-bees$Days_till_dead
+survival<-Surv(time, event)
+```
+
+```{r}
+# model survival as the response 
+# can't include wing because dead bees don't have wing measurements 
+
+mort1<- coxme(survival ~ species*Treatment + (1|colony), data=bees) 
+mort2<- coxme(survival ~ species + Treatment + (1|colony), data=bees) 
+mort3<- coxph(survival ~ species + Treatment, data=bees) 
+
+AICtab(mort1, mort2, mort3)
+```
+
+```{r, eval= FALSE}
+Anova(mort3)
+```
+
