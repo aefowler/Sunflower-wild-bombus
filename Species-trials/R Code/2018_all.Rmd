@@ -1,0 +1,585 @@
+---
+title: "2018 Count Data Analyses"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    highlight: pygments
+---
+
+This R code is for analyzing the effect of pollen diet on Crithidia infection in wild Bombus griseocollis and Bombus bimaculatus workers for the manuscript titled: "Sunflower pollen reduces a gut pathogen in the model bee species, Bombus impatiens, but has weaker effects in three wild congeners"
+
+Authors: Alison Fowler*, Jonathan Giacomini, Sara June Connon, Becky Irwin, and Lynn Adler 
+Corresponding author*: aefowler@umass.edu 
+
+## Libraries 
+```{r, results = 'hide', message = FALSE, warning = FALSE}
+library(lattice)
+library(psych)
+library(car)
+library(AER)
+library(MASS)
+library(corrplot)
+library(AICcmodavg)
+library(dplyr)
+library(tidyr)
+library(lme4)
+library(mgcv)
+library(scatterplot3d)
+library(bbmle)
+library(emmeans)
+library(ggplot2)
+library(tidyverse)
+library(ggalt)
+library(multcomp)
+library(DHARMa)
+```
+
+## *B. bimaculatus* 
+
+### Get set up 
+
+```{r, message = FALSE}
+bimacs18<- read_csv("CSV/2018_bimacs.csv")
+
+bimacs18 <- bimacs18 %>% 
+  dplyr::rename(count = "Crithidia Count") %>% 
+  dplyr::rename(ID = "Bee ID") %>% 
+  dplyr::rename(inoc_date = "Inoc. Date") %>% 
+  dplyr::rename(crithidia_strain = "Crithidia Strain") %>% 
+  dplyr::rename(colony = "Colony ID")
+
+# remove the bees that didn't finish inoculum (48, 95, 50) and only  bee from colony 112 (49)
+bimacs18 <- bimacs18 %>% 
+  filter(ID != "48") %>% 
+  filter(ID != "95") %>% 
+  filter(ID != "50") %>% 
+  filter(ID != "49")
+
+# make colony ID a factor 
+bimacs18$colony<-as.factor(bimacs18$colony)
+
+# make treat a factor 
+bimacs18$Treatment<-as.factor(bimacs18$Treatment)
+
+# make Crithidia strain a factor
+bimacs18$crithidia_strain <- as.factor(bimacs18$crithidia_strain )
+
+# make inoc date a factor
+bimacs18$inoc_date <- as.factor(bimacs18$inoc_date)
+
+# add column for presence/absence 
+bimacs18$Presence <- NA
+
+for(i in 1:length(bimacs18$count)){
+  if(bimacs18$count[i] >=1) {
+    bimacs18$Presence[i] <- 1
+  } else {
+    bimacs18$Presence[i] <- 0
+  }
+} 
+```
+
+### Data exploration 
+
+```{r}
+summary(bimacs18$inoc_date)
+summary(bimacs18$colony)
+summary(bimacs18$Treatment)
+summary(bimacs18$crithidia_strain)
+
+boxplot(count ~ inoc_date, data=bimacs18)
+boxplot(count ~ Treatment, data=bimacs18)
+boxplot(count ~ colony, data=bimacs18)
+boxplot(count ~ crithidia_strain, data=bimacs18)
+
+# look at the raw means that correspond with those boxplots 
+
+tapply(bimacs18$count, list(bimacs18$Treatment), mean)
+tapply(bimacs18$count, list(bimacs18$colony), mean) 
+tapply(bimacs18$count, list(bimacs18$inoc_date), mean)
+tapply(bimacs18$count, list(bimacs18$crithidia_strain), mean)
+
+# plot coloreed by colony (ggalt package)
+(ggplot(bimacs18, aes(x=Treatment, y=count, shape=colony))
+  +geom_point(aes(color=colony),alpha=0.5)
+  +geom_encircle(aes(color=colony, group=colony))
+  +theme(legend.position="left"))
+
+# plot colored by Crithidia source
+(ggplot(bimacs18, aes(x=Treatment, y=count, shape=crithidia_strain))
+  +geom_point(aes(color=crithidia_strain),alpha=0.5)
+  +geom_encircle(aes(color=crithidia_strain, group=crithidia_strain))
+  +theme(legend.position="left"))
+
+hist(bimacs18$count, breaks = 20)
+
+look <- c("count", "MCL", "colony", "inoc_date", "Treatment")
+pairs.panels(bimacs18[,look], scale= TRUE, method="spearman")
+
+plot(count ~ MCL, data=bimacs18)
+```
+
+### Model Infection Intensity 
+
+```{r}
+# strain as interaction
+bmod1<-glmer.nb(count ~ Treatment*crithidia_strain + MCL + (1|colony) + (1|inoc_date), data = bimacs18)
+isSingular(bmod1)
+
+# one RE
+bmod2<-glmer.nb(count ~ Treatment*crithidia_strain + MCL + (1|colony) , data = bimacs18)
+bmod3<-glmer.nb(count ~ Treatment*crithidia_strain + MCL + (1|inoc_date), data = bimacs18)
+isSingular(bmod3)
+
+# no RE but include wing
+bmod4<-glm.nb(count ~ Treatment*crithidia_strain + MCL , data = bimacs18)
+
+# REs but no wing 
+bmod5<-glmer.nb(count ~ Treatment*crithidia_strain + (1|colony) + (1|inoc_date), data = bimacs18)
+isSingular(bmod5)
+bmod6<-glmer.nb(count ~ Treatment*crithidia_strain + (1|colony), data = bimacs18)
+bmod7<-glmer.nb(count ~ Treatment*crithidia_strain + (1|inoc_date), data = bimacs18)
+isSingular(bmod7)
+
+# neither wing nor REs
+bmod8<-glm.nb(count ~ Treatment*crithidia_strain, data = bimacs18)
+
+# strain as additive 
+# with wing
+bmod9<-glmer.nb(count ~ Treatment + crithidia_strain + MCL + (1|colony) + (1|inoc_date), data = bimacs18)
+isSingular(bmod9)
+bmod10<-glmer.nb(count ~ Treatment + crithidia_strain + MCL + (1|colony) , data = bimacs18)
+bmod11<-glmer.nb(count ~ Treatment + crithidia_strain + MCL + (1|inoc_date), data = bimacs18)
+isSingular(bmod11)
+bmod12<-glm.nb(count ~ Treatment + crithidia_strain + MCL , data = bimacs18)
+
+#without wing
+bmod13<-glmer.nb(count ~ Treatment + crithidia_strain + (1|colony) + (1|inoc_date), data = bimacs18)
+isSingular(bmod13)
+bmod14<-glmer.nb(count ~ Treatment + crithidia_strain + (1|colony), data = bimacs18)
+bmod15<-glmer.nb(count ~ Treatment + crithidia_strain + (1|inoc_date), data = bimacs18)
+isSingular(bmod15)
+bmod16<- glm.nb(count ~ Treatment + crithidia_strain, data = bimacs18)
+
+AICtab(bmod1,bmod2,bmod3,bmod4,bmod5,bmod6,bmod7,bmod8,bmod9,bmod10,bmod11,bmod12,bmod13,bmod14,bmod15,bmod16)
+```
+
+Model for 2018 bimaculatus: 
+Model 12: count ~ Treatment + crithidia_strain + MCL 
+
+```{r}
+# look at model fit 
+par(mfrow=c(2,2))
+plot(bmod12)
+simresid <- simulateResiduals(bmod12, plot = T)
+
+# look at output 
+Anova(bmod12)
+summary(bmod12)
+```
+
+### Plot Intensity
+
+```{r}
+bimac_18_means<-emmeans(bmod12, ~Treatment + crithidia_strain) 
+b.18.means.to.plot<-as.data.frame(summary(bimac_18_means))
+b.18.means.to.plot
+
+# exponentiate to get back on response scale
+b.18.means.to.plot$expmean<- exp(b.18.means.to.plot$emmean)
+b.18.means.to.plot$tfupper<-exp(b.18.means.to.plot$emmean + b.18.means.to.plot$SE)
+b.18.means.to.plot$tlower<-exp(b.18.means.to.plot$emmean - b.18.means.to.plot$SE)
+exp.mean<-b.18.means.to.plot$expmean
+b.18.means.to.plot
+```
+
+```{r}
+# create letters from pair-wise tests 
+bimac.18.lets<-cld(bimac_18_means, Letters = c('a','b','c', 'd'), sort = FALSE)
+bimac.18.letters<-dplyr::select(bimac.18.lets, Treatment, crithidia_strain, .group)
+bimac.18.letters
+```
+
+```{r}
+bim_2018_plot<-
+  ggplot(b.18.means.to.plot, aes(x=Treatment, group = Treatment,
+                          y=b.18.means.to.plot$expmean, 
+                          ymin=b.18.means.to.plot$tlower,
+                          ymax=b.18.means.to.plot$tfupper)) + 
+  theme_bw()+
+  geom_point(stat="identity",
+             aes(shape = crithidia_strain,
+                 color = Treatment),
+             size = 5) +
+  geom_errorbar(width=0.05, aes(color = Treatment))+
+  theme(axis.text.x = element_blank(), 
+        axis.text.y = element_text(face="plain",
+                                   size = 15,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=15))+
+  scale_shape_manual(expression(paste(italic("Crithidia"))),
+                     labels = c("BIM-3",
+                                "BIM-2",
+                                "BIM-1"),
+                     values = c(15, 17, 19),
+                     guide = "legend") + 
+  scale_color_manual(values = c("chocolate2", "royalblue3")) + 
+  guides(color = FALSE) +
+  theme(legend.position = c(.5,.7)) + 
+  theme(axis.title.x = element_blank()) + 
+  theme(axis.title.y = element_blank()) + 
+  ggtitle(expression(paste(italic("B. bimaculatus ")))) + 
+  geom_text(x = 2.35, y = 230, label = "2018", size = 4)
+#  theme(plot.title = element_text(hjust = 0.5))
+```
+
+### Presence/Absence 
+```{r}
+# no REs 
+bimacs_18_presence_add <- glm(Presence ~ Treatment + crithidia_strain + MCL, family = binomial(link = "logit"), data = bimacs18)
+
+bimacs_18_presence_int <- glm(Presence ~ Treatment * crithidia_strain + MCL, family = binomial(link = "logit"), data = bimacs18)
+
+bimacs_18_presence_wing <- glm(Presence ~ Treatment + MCL, family = binomial(link = "logit"), data = bimacs18)
+
+bimacs_18_presence_no_wing <- glm(Presence ~ Treatment, family = binomial(link = "logit"), data = bimacs18)
+
+# int models with REs 
+bimacs_18_presence_int_both <- glmer(Presence ~ Treatment * crithidia_strain + MCL + (1|colony) + (1|inoc_date), family = binomial(link = "logit"), data = bimacs18) # failed to converge 
+
+bimacs_18_presence_int_inoc <- glmer(Presence ~ Treatment * crithidia_strain + MCL + (1|inoc_date), family = binomial(link = "logit"), data = bimacs18)
+
+bimacs_18_presence_int_col <- glmer(Presence ~ Treatment * crithidia_strain + MCL + (1|colony), family = binomial(link = "logit"), data = bimacs18)
+
+# models without source but with REs
+bimacs_18_presence_wing_both <- glmer(Presence ~ Treatment + MCL + (1|colony) + (1|inoc_date), family = binomial(link = "logit"), data = bimacs18)
+
+bimacs_18_presence_wing_inoc <- glmer(Presence ~ Treatment + MCL + (1|inoc_date), family = binomial(link = "logit"), data = bimacs18)
+
+bimacs_18_presence_wing_col <- glmer(Presence ~ Treatment + MCL + (1|colony), family = binomial(link = "logit"), data = bimacs18)
+
+bimacs_18_presence_nowing_col <- glmer(Presence ~ Treatment + (1|colony), family = binomial(link = "logit"), data = bimacs18)
+
+AICtab(bimacs_18_presence_int_both, 
+       bimacs_18_presence_int_col, 
+       bimacs_18_presence_int_inoc, 
+       bimacs_18_presence_int, 
+       bimacs_18_presence_wing, 
+       bimacs_18_presence_wing_both, 
+       bimacs_18_presence_wing_inoc, 
+       bimacs_18_presence_wing_col, 
+       bimacs_18_presence_add, 
+       bimacs_18_presence_no_wing,
+       bimacs_18_presence_nowing_col)
+
+# wing col does best
+```
+
+```{r}
+# look at significance of colony: 
+
+anova(bimacs_18_presence_int_col, bimacs_18_presence_int) 
+# colony is highly significant with interaction term p = 0.004 
+
+anova(bimacs_18_presence_wing_col, bimacs_18_presence_wing) 
+# still significant but not as much without the interaction term p = 0.011
+```
+
+```{r}
+# look at outputs from model with colony as random effect (and no source term)
+Anova(bimacs_18_presence_wing_col)
+```
+
+```{r}
+# look at outputs from model with colony and source interaction 
+Anova(bimacs_18_presence_int_col)
+
+summary(bimacs_18_presence_int_col)
+
+emmeans(bimacs_18_presence_int_col, specs = pairwise ~ Treatment|crithidia_strain, type = "response")
+```
+
+```{r}
+# look at means of interaction model
+bimac_18_p_int_means<-emmeans(bimacs_18_presence_int, ~Treatment * crithidia_strain, type = "response")
+
+# look at tukey's adjusted pairwise comparisons
+bimac.18.p.lets<-cld(bimac_18_p_int_means, Letters = c('a','b','c', 'd'), sort = FALSE)
+```
+
+Model we're going to use: 
+bimacs_18_presence_wing_col
+
+```{r}
+summary(bimacs_18_presence_wing_col)
+Anova(bimacs_18_presence_wing_col)
+
+emmeans(bimacs_18_presence_wing_col, ~Treatment, type = "response")
+```
+
+### Mortality 
+
+```{r}
+bimacsfull<-read_csv("CSV/bimaculatus_full_data.csv")
+
+bimacsfull <- bimacsfull %>% 
+  rename(ID = "Bee ID") %>% 
+  rename(inoc_date = "Inoc. Date") %>% 
+  rename(crithidia_strain = "Crithidia Strain") %>% 
+  rename(colony = "Colony ID") %>% 
+  rename(MCL = "MCL-MM")
+
+# remove the bees that didn't finish inoculum (48, 95, 50, 28) and only  bee from colony 112 (49)
+bimacsfull <- bimacsfull %>% 
+  filter(ID != "48") %>% 
+  filter(ID != "95") %>% 
+  filter(ID != "50") %>% 
+  filter(ID != "49") %>% 
+  filter(ID != "28")
+
+# make colony ID a factor 
+bimacsfull$colony<-as.factor(bimacsfull$colony)
+
+# make treat a factor 
+bimacsfull$Treatment<-as.factor(bimacsfull$Treatment)
+
+# make Crithidia strain a factor
+bimacsfull$crithidia_strain <- as.factor(bimacsfull$crithidia_strain )
+
+# make inoc date a factor
+bimacsfull$inoc_date <- as.factor(bimacsfull$inoc_date)
+
+summary(bimacsfull$dead)
+```
+
+```{r}
+# make a survival object
+event <- bimacsfull$dead
+time <- bimacsfull$days_til_dead
+survival <- Surv(time, event)
+```
+
+```{r}
+# model survival as the response with the cox proportional hazards model 
+
+# don't have wing measurements for dead bees so exclude wing
+
+b1<- coxph(survival ~ Treatment * crithidia_strain, data=bimacsfull) 
+b2<- coxph(survival ~ Treatment + crithidia_strain, data=bimacsfull) 
+b3<- coxph(survival ~ Treatment, data=bimacsfull)
+b4<- coxph(survival ~ crithidia_strain, data=bimacsfull)
+
+b5<- coxme(survival ~ Treatment * crithidia_strain + (1|inoc_date), data=bimacsfull)
+b6<- coxme(survival ~ Treatment + crithidia_strain + (1|inoc_date), data=bimacsfull)
+b7<- coxme(survival ~ crithidia_strain + (1|inoc_date), data=bimacsfull)
+b8<- coxme(survival ~ Treatment + (1|inoc_date), data=bimacsfull)
+
+b9<-coxph(survival ~ Treatment + crithidia_strain + inoc_date, data = bimacsfull)
+
+
+AICtab(b1, b2, b3, b4, b5, b6, b7, b8, b9)
+```
+
+best models didn't include treatment. but we'll use b8. 
+
+```{r}
+ggcoxdiagnostics(b2, 
+                 type = "deviance",
+                 linear.predictions = FALSE, 
+                 ggtheme = theme_bw())  
+# just to see - not the model we're using! 
+```
+
+```{r}
+Anova(b8)
+```
+
+Plots
+
+```{r}
+mortb_plot <- survfit(survival ~ Treatment, data=bimacsfull)
+ggsurvplot(mortb_plot, legend = "left",palette = c("orange","red","forestgreen"))
+```
+
+
+## *B. vagans* 
+
+### Get set up 
+
+```{r}
+vagans<- read_csv("CSV/2018_vagans.csv")
+
+vagans <- vagans %>% 
+  dplyr::rename(ID = "Bee ID") %>% 
+  dplyr::rename(inoc_date = "Inoc. Date") %>% 
+  dplyr::rename(crithidia_strain = "Crithidia Strain") %>% 
+  dplyr::rename(colony = "Colony ID") %>% 
+  dplyr::rename(wing = "MCL-MM")
+
+# remove the bees that didn't finish inoculum (108, 112) and escapes (104, 162) and dead (98)
+vagans <- vagans %>% 
+  filter(ID != "108") %>% 
+  filter(ID != "112") %>% 
+  filter(ID != "104") %>% 
+  filter(ID != "98") %>% 
+  filter(ID != "162")
+
+# make colony ID a factor 
+vagans$colony<-as.factor(vagans$colony)
+
+# make treat a factor 
+vagans$Diet<-as.factor(vagans$Diet)
+
+# make Crithidia strain a factor
+vagans$crithidia_strain <- as.factor(vagans$crithidia_strain )
+
+# make inoc date a factor
+vagans$inoc_date <- as.factor(vagans$inoc_date)
+
+# replace lost wing values (NAs) with mean wing 
+vagans<- vagans %>% 
+  mutate(wing2 = case_when(is.na(wing) ~ mean(wing, na.rm = TRUE), 
+                          TRUE ~ as.numeric(wing)
+                          )
+         )
+
+# add column for presence/absence 
+vagans$Presence <- NA
+
+for(i in 1:length(vagans$Count)){
+  if(vagans$Count[i] >=1) {
+    vagans$Presence[i] <- 1
+  } else {
+    vagans$Presence[i] <- 0
+  }
+} 
+
+```
+
+### Data exploration 
+
+```{r}
+summary(vagans$inoc_date)
+summary(vagans$Diet)
+
+boxplot(Count ~ inoc_date, data=vagans)
+boxplot(Count ~ Diet, data=vagans)
+
+# look at the raw means that correspond with those boxplots 
+
+tapply(vagans$Count, list(vagans$Diet), mean)
+tapply(vagans$Count, list(vagans$inoc_date), mean)
+
+hist(vagans$Count, breaks = 20)
+
+look <- c("Count", "wing2", "inoc_date", "Diet")
+pairs.panels(vagans[,look], scale= TRUE, method="spearman")
+
+plot(Count ~ wing2, data=vagans)
+```
+
+### Model Intensity
+
+```{r}
+vmod1<-glmer.nb(Count ~ Diet + wing2 + (1|inoc_date), data = vagans)
+vmod2<-glmer.nb(Count ~ Diet + (1|inoc_date), data = vagans)
+vmod3<-glm.nb(Count ~ Diet + wing2, data = vagans)
+vmod4<-glm.nb(Count ~ Diet, data = vagans)
+
+AICtab(vmod1, vmod2, vmod3, vmod4)
+```
+
+```{r}
+plot(vmod2)
+simresid <- simulateResiduals(vmod2, plot = T)
+Anova(vmod2)
+```
+
+### Plot Intensity
+
+```{r}
+vmeans<-emmeans(vmod2, ~Diet) 
+v.means.to.plot<-as.data.frame(summary(vmeans))
+v.means.to.plot$expmean<- exp(v.means.to.plot$emmean)
+v.means.to.plot$tfupper<-exp(v.means.to.plot$emmean + v.means.to.plot$SE)
+v.means.to.plot$tlower<-exp(v.means.to.plot$emmean - v.means.to.plot$SE)
+exp.mean<-v.means.to.plot$expmean
+v.means.to.plot
+
+v.lets<-cld(vmeans, Letters = c('a','b','c', 'd'), sort = FALSE)
+vletters<-dplyr::select(v.lets, Diet, .group)
+```
+
+```{r}
+vagans_plot<-
+  ggplot(v.means.to.plot, aes(x=Diet, group = Diet,
+                          y=v.means.to.plot$expmean, 
+                          ymin=v.means.to.plot$tlower,
+                          ymax=v.means.to.plot$tfupper)) + 
+  theme_classic()+
+  geom_point(stat="identity",
+             aes(color = Diet),
+             size = 5) +
+  geom_errorbar(width=0.05, aes(color = Diet)) +
+  theme(axis.text.x = element_text(face="plain",
+                                   size = 15,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"), 
+        axis.text.y = element_text(face="plain",
+                                   size = 15,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=15))+
+  scale_color_manual(values = c("chocolate2", "royalblue3")) + 
+  scale_x_discrete(labels = c("100% SF", "Control")) +
+  guides(color = FALSE) +
+  theme(axis.title.x = element_blank()) + 
+  theme(axis.title.y = element_blank()) + 
+  ggtitle(expression(paste(italic("B. vagans*")))) + 
+  geom_text(x=2.35, y=57.5, label="2018", size = 4) 
+
+vagans_plot
+```
+
+### Presence/Absence for vagans
+
+```{r}
+vagans_presence <- glm(Presence ~ Diet, family = binomial(link = "logit"), data = vagans)
+summary(vagans_presence)
+Anova(vagans_presence)
+anova(vagans_presence, test = "Chisq")
+```
+
+```{r}
+Diet <- c("SF", "WF")
+newdata <- data.frame(Diet)
+newdata$dietP <- predict(vagans_presence, newdata = newdata, type = "response")
+newdata$inverse <- 1-newdata$dietP
+newdata
+```
+
+```{r}
+newdata2 <- cbind(newdata, predict(vagans_presence, newdata = newdata, type = "link", se = T))
+newdata2
+```
+
+```{r}
+newdata3 <- within(newdata2, {
+    PredictedProb <- plogis(fit)
+    LL <- plogis(fit - (1.96 * se.fit)) # this translates to a 95% CI  
+    UL <- plogis(fit + (1.96 * se.fit))
+})
+
+newdata3
+```
+
+
+### No mortality analysis ; only one bee died (SF). 
