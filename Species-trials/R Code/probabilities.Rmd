@@ -1,0 +1,67 @@
+---
+title: "probabilities"
+author: "Alison Fowler"
+date: "4/26/2021"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r, message = F}
+probs <- read_csv("probabilities_8_18.csv")
+
+probs$Species <- as.factor(probs$Species)
+
+# rename 
+levels(probs$Species)[levels(probs$Species)=="B. bimaculatus (2017)"] <- "B. bimaculatus (2017; IMP-2)"
+levels(probs$Species)[levels(probs$Species)=="B. impatiens (2016; Wild)"] <- "B. impatiens (2016)"
+
+# reorder species 
+levels(probs$Species)
+probs$Species <- factor(probs$Species, levels=c("B. vagans (2018)",
+                                                "B. bimaculatus (2018)",
+                                                "B. bimaculatus (2017; IMP-2)",
+                                                "B. griseocollis (2017)", 
+                                                "B. griseocollis (2016)",
+                                                "B. impatiens (2020)",
+                                                "B. impatiens (2016)",
+                                                "B. impatiens (2016; Commercial)"))
+```
+
+```{r}
+prob_plot<-
+  ggplot(probs, aes(x = Species, y = Prob.1, group = Diet, ymax = UL.1, ymin = LL.1)) + 
+  theme_classic() +
+  geom_point(aes(color = Diet),
+             size = 4,
+             position = position_dodge(width = 0.4)) + 
+  ylab("Probability of Infection (95% CI)") + 
+  geom_errorbar(width=0.025,
+                position = position_dodge(width = 0.4),
+                aes(color = Diet)) + 
+  scale_color_manual(values = c("chocolate2", "goldenrod1", "royalblue3"),
+                     name = "Pollen Diet") + 
+  coord_flip() + 
+  theme(
+    axis.text.x = element_text(size = 14,
+                               vjust = 0.5), 
+    axis.text.y = element_text(face="plain",
+                               size = 14,
+                               colour = "black"),
+    text = element_text(size=18),
+    legend.position = "bottom")  +
+  scale_x_discrete(labels=my.labels) + 
+  annotate(geom="text", x=1, y=0.1, label="P = 0.016") + # vagans 
+  annotate(geom="text", x=2, y=0.1, label="P = 0.043") + # bim 2018 
+  annotate(geom="text", x=3, y=0.06, label="N.S.") + # bim 2017
+  annotate(geom="text", x=4, y=0.06, label="N.S.") + # gris 2017
+  annotate(geom="text", x=5, y=0.06, label="N.S.") + # gris 2016
+  annotate(geom="text", x=6, y=0.1, label="P = 0.0003") + # imp 2020
+  annotate(geom="text", x=7, y=0.06, label="N.S.") + # imp 2016 wild
+  annotate(geom="text", x=8.1, y=0.1, label="P = 0.005") # imp 2016 comm  
+
+prob_plot
+```
+
