@@ -7,6 +7,8 @@ output: html_document
 
 ```{r}
 library(ggpubr)
+library(grid)
+library(gridExtra)
 ```
 
 # Use this 
@@ -22,5 +24,11 @@ fig2 <-
             NULL,
             ncol = 2, nrow = 4,
             align = "v")
-fig2
+
+axis <- annotate_figure(fig2,
+                left = textGrob(~italic("Crithidia")~ "count (cells per 0.02 µL) ",
+                                rot = 90,
+                                vjust = 0.5,
+                                gp = gpar(cex = 2)))
+
 ```

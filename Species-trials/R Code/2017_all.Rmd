@@ -1,0 +1,1616 @@
+---
+title: "2017 Experiment"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 6
+    highlight: pygments
+---
+This R code is for analyzing the effect of pollen diet on Crithidia infection in wild Bombus griseocollis and Bombus bimaculatus workers for the manuscript titled: "Sunflower pollen reduces a gut pathogen in the model bee species, Bombus impatiens, but has weaker effects in three wild congeners"
+
+Authors: Alison Fowler*, Jonathan Giacomini, Sara June Connon, Becky Irwin, and Lynn Adler 
+Corresponding author*: aefowler@umass.edu 
+
+## Libraries 
+```{r, results = 'hide', message = FALSE, warning = FALSE}
+library(lattice)
+library(psych)
+library(car)
+library(AER)
+library(MASS)
+library(corrplot)
+library(AICcmodavg)
+library(dplyr)
+library(tidyr)
+library(lme4)
+library(mgcv)
+library(scatterplot3d)
+library(bbmle)
+library(emmeans)
+library(ggplot2)
+library(tidyverse)
+library(ggalt)
+library(multcomp)
+library(coxme)
+library(survminer)
+library(DHARMa)
+library(glmmTMB)
+```
+
+# All three species together: 
+
+### Get set up 
+
+```{r, results = 'hide', message = FALSE}
+bees2017<-read_csv("CSV/2017 single bees.csv")
+```
+
+Note: I'm not sure what the missing counts are for the bees that don't have a note that they died - they were dissected 7 days after inoculation but they dont' have a count. I asked SJ whats up and she doesn't know either. So we'll just remove those. 
+
+```{r}
+# rename columns
+bees2017 <- bees2017 %>% 
+  rename(count = "Crithidia Count") %>% 
+  rename(ID = "Bee ID") %>% 
+  rename(inoc_date = "Inoc. Date") %>% 
+  rename(crithidia_strain = "Crithidia Strain") %>% 
+  rename(colony = "Colony ID")
+
+# make species a factor
+bees2017$Species <- as.factor(bees2017$Species)
+
+# make treatment a factor
+bees2017$Treatment <- as.factor(bees2017$Treatment)
+
+# make colony ID a factor 
+bees2017$colony<-as.factor(bees2017$colony)
+
+# make date a factor 
+bees2017$inoc_date<-as.factor(bees2017$inoc_date)
+
+# make strain a factor
+bees2017$crithidia_strain <- as.factor(bees2017$crithidia_strain)
+
+# rename levels
+levels(bees2017$Treatment)
+library(plyr)
+bees2017$Treatment <- revalue(bees2017$Treatment, c(
+  "50/50"="50-50",
+  "CS100"="SF",
+  "KW100"="WF"))
+
+# reorder treatments 
+bees2017$Treatment <- factor(bees2017$Treatment, levels=c("SF", "50-50", "WF"))
+levels(bees2017$Treatment)
+
+# make count and wing numeric 
+bees2017$count <- as.numeric(paste(bees2017$count))
+bees2017$MCL <- as.numeric(paste(bees2017$MCL))
+```
+
+Clean up the data: 
+
+```{r}
+bees2017<- bees2017 %>% 
+  filter(colony != "11") %>% # remove impatiens from colony 11, none of which got infected. 
+  filter(colony != "9") %>%  # and colony 9 because there were only two bees 
+  filter(Caste == "worker") # select just workers 
+
+bees2017 <- bees2017 %>% 
+  filter(ID != "268") %>% # remove bees that died before inoculated
+  filter(ID != "277") %>% 
+  filter(ID != "211") %>%  # missing bee 
+  filter(ID != "47") %>% # remove bees that didn't finish their inoculum
+  filter(ID != "263") %>% 
+  filter(ID != "282") %>% 
+  filter(ID != "286") %>% 
+  filter(ID != "287") %>% 
+  filter(ID != "214")
+
+# remove dead 
+bees2017_alive <- bees2017 %>% 
+  filter(count != ".")
+
+# add a column for present/absent 
+bees2017_alive$Presence <- NA
+
+for(i in 1:length(bees2017_alive$count)){
+  if(bees2017_alive$count[i] >=1) {
+    bees2017_alive$Presence[i] <- 1
+  } else {
+    bees2017_alive$Presence[i] <- 0
+  }
+} 
+```
+
+Final sample size to use (still includes dead bees): 252 
+
+```{r}
+summary(bees2017$Treatment)
+summary(bees2017$Species)
+summary(bees2017$count)
+```
+91 out of 252 bees died in this experiment 
+
+```{r}
+summary(bees2017_alive$Treatment)
+summary(bees2017_alive$Species)
+summary(bees2017_alive$count)
+```
+Bimacs: 52/79
+Gris: 69/131
+Imps: 40/42 
+
+```{r}
+#lets subset each species and write a new csv file for each and then DO NOT RERUN THIS! 
+#Leave this hashtagged out or delete if you think you will remember. 
+# BE CAREFUL IF YOU DECIDE TO RERUN THIS! 
+
+    #imps17 <- bees2017 %>% 
+    #  filter(Species == "B. impatiens")
+   # write.csv(imps17, "2017_imps.csv")
+    #bimacs17 <- bees2017 %>% 
+    #  filter(Species == "B. bimaculatus")
+    #write.csv(bimacs17, "2017_bimacs.csv")
+    #gris17 <- bees2017 %>% 
+   #   filter(Species == "B. griseocollis")
+    #write.csv(gris17, "2017_gris_2.csv")
+```
+
+### Data exploration with SS Crithidia 
+
+```{r}
+# lets subset out bees infected with SS Crithidia 
+bees2017_SS <- bees2017 %>% 
+  filter(crithidia_strain == "IMP-MA-SS")
+```
+
+Sample size of bees fed SS Critihdia: 180
+
+```{r}
+summary(bees2017_SS$Species)
+summary(bees2017_SS$inoc_date)
+summary(bees2017_SS$colony)
+summary(bees2017_SS$Treatment)
+```
+
+#### Count analysis 
+```{r}
+# remove dead bees
+bees2017_SS_alive <- bees2017_SS %>% 
+  filter(count != ".")
+
+summary(bees2017_SS_alive$Species)
+summary(bees2017_SS_alive$inoc_date)
+summary(bees2017_SS_alive$colony)
+summary(bees2017_SS_alive$Treatment)
+```
+
+Number of bees (out of 180) fed SS that survived the trial: 131 (73%)
+Bimacs: 32/45 (71%)
+Gris: 59/93 (63%)
+Imps: 40/42 (95%)
+
+```{r}
+bees2017_SS_alive %>% 
+  ggplot(aes(x = Treatment, y = count)) + 
+  geom_boxplot() +
+  theme_bw() + 
+  geom_point(aes(color = Species), alpha = 0.5) + 
+  scale_color_manual(values=c("darkorange", "deepskyblue", "darkred")) + 
+  geom_encircle(aes(color=Species, group=Species), size = 2, lty = 2)
+
+hist(bees2017_SS_alive$count)
+
+plot(count ~ MCL, data = bees2017_SS_alive)
+
+# replace lost wing values (NAs) with mean wing 
+bees2017_SS_alive<- bees2017_SS_alive %>% 
+  mutate(wing = case_when(is.na(MCL) ~ mean(MCL, na.rm = TRUE), 
+                          TRUE ~ as.numeric(MCL)
+                          )
+         )
+```
+
+#### Model 
+
+```{r}
+SSmod <- glmer.nb(count ~ Treatment*Species + wing + (1|inoc_date), data = bees2017_SS_alive)
+isSingular(SSmod)
+plot(SSmod)
+Anova(SSmod)
+
+SSmod_no_inoc<- glm.nb(count ~ Treatment*Species + wing, data = bees2017_SS_alive)
+par(mfrow=c(2,2))
+plot(SSmod_no_inoc)
+Anova(SSmod_no_inoc)
+
+SSmod_3<- glm.nb(count ~ Treatment*Species, data = bees2017_SS_alive)
+
+AICtab(SSmod, SSmod_no_inoc, SSmod_3)
+
+Anova(SSmod_3)
+```
+
+#### Plot 
+
+```{r}
+SS17_means<-emmeans(SSmod_3, ~Treatment*Species) 
+means.to.plot<-as.data.frame(summary(SS17_means))
+means.to.plot$expmean<- exp(means.to.plot$emmean)
+means.to.plot$tfupper<-exp(means.to.plot$emmean + means.to.plot$SE)
+means.to.plot$tlower<-exp(means.to.plot$emmean - means.to.plot$SE)
+exp.mean<-means.to.plot$expmean
+means.to.plot
+
+SS17.lets<-cld(SS17_means, Letters = c('a','b','c', 'd'), sort = FALSE)
+SS17.letters<-dplyr::select(SS17.lets, Treatment, Species, .group)
+
+ggplot(means.to.plot, aes(x=Treatment, group = Species,
+                          y=means.to.plot$expmean, 
+                          ymin=means.to.plot$tlower,
+                          ymax=means.to.plot$tfupper)) + 
+  theme_bw()+
+  geom_point(stat="identity", 
+             aes(color = Species),
+             size = 3) +
+  geom_line() +
+  labs(y = expression(paste(italic("Crithidia ") , "count"))) +
+  geom_errorbar(width=0.025)+
+  theme(axis.text.x = element_text(face = "plain", 
+                                   size = 18,
+                                   vjust = 0.99, 
+                                   hjust = 0.5,
+                                   colour = "black"), 
+        axis.text.y = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=18))+
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)))+
+  theme(axis.title.x = element_text(size=18))+
+  geom_text(aes (y = means.to.plot$expmean, 
+                 label = SS17.letters$.group), 
+            size = 5, hjust = 1.5) +
+  scale_color_manual(values=c("orchid2", "darkgoldenrod1", "deepskyblue"))
+```
+
+#### remove Impatiens from SS subset 
+
+```{r}
+SS_b_g <- bees2017_SS_alive %>% 
+  filter(Species != "B. impatiens")
+```
+
+##### Model 
+
+```{r}
+SS_b_g_mod1 <- glmer.nb(count ~ Treatment*Species + wing + (1|inoc_date), data = SS_b_g)
+
+SS_b_g_mod2 <- glm.nb(count ~ Treatment*Species + wing, data = SS_b_g)
+
+SS_b_g_mod3 <- glm.nb(count ~ Treatment*Species, data = SS_b_g)
+
+SS_b_g_mod4 <- glm.nb(count ~ Treatment + Species, data = SS_b_g)
+
+AICtab(SS_b_g_mod1, SS_b_g_mod2, SS_b_g_mod3, SS_b_g_mod4)
+```
+
+```{r}
+plot(SS_b_g_mod3)
+summary(SS_b_g_mod3)
+Anova(SS_b_g_mod3)
+```
+
+```{r}
+SS_bg_means<-emmeans(SS_b_g_mod4, ~Treatment+Species) 
+means.to.plot<-as.data.frame(summary(SS_bg_means))
+means.to.plot$expmean<- exp(means.to.plot$emmean)
+means.to.plot$tfupper<-exp(means.to.plot$emmean + means.to.plot$SE)
+means.to.plot$tlower<-exp(means.to.plot$emmean - means.to.plot$SE)
+exp.mean<-means.to.plot$expmean
+means.to.plot
+
+SSbg.lets<-cld(SS_bg_means, Letters = c('a','b','c', 'd'), sort = FALSE)
+SSbg.letters<-dplyr::select(SSbg.lets, Treatment, Species, .group)
+
+ggplot(means.to.plot, aes(x=Treatment, group = Species,
+                          y=means.to.plot$expmean, 
+                          ymin=means.to.plot$tlower,
+                          ymax=means.to.plot$tfupper)) + 
+  theme_bw()+
+  geom_point(stat="identity", 
+             aes(color = Species),
+             size = 3) +
+  geom_line() +
+  labs(y = expression(paste(italic("Crithidia ") , "count"))) +
+  geom_errorbar(width=0.025)+
+  theme(axis.text.x = element_text(face = "plain", 
+                                   size = 18,
+                                   vjust = 0.99, 
+                                   hjust = 0.5,
+                                   colour = "black"), 
+        axis.text.y = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=18))+
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)))+
+  theme(axis.title.x = element_text(size=18))+
+  geom_text(aes (y = means.to.plot$expmean, 
+                 label = SSbg.letters$.group), 
+            size = 5, hjust = 1.5) +
+  scale_color_manual(values=c("orchid2", "darkgoldenrod1"))
+```
+
+### Data exploration with MOA Crithidia 
+
+```{r}
+# lets subset out bees infected with MOA Crithidia 
+bees2017_MOA <- bees2017 %>% 
+  filter(crithidia_strain == "MOA")
+```
+
+Wow, a LOT of these bees either died or didnt have a count when dissected (for some reason? died?)
+
+Start with 63, 2 died before inoculation (268, 277), 14 died during the trial, 3 didn't drink their inoculum, and then 19 didn't have a count but didn't have a note that they died. 
+
+So that leaves us with 23 bees, 20 of which are bimaculatus. So no use in comparing the three species here. 
+
+```{r}
+summary(bees2017_MOA$Species)
+summary(bees2017_MOA$inoc_date)
+summary(bees2017_MOA$colony)
+summary(bees2017_MOA$Treatment)
+
+bees2017_MOA %>% 
+  ggplot(aes(x = Treatment, y = count)) + 
+  geom_boxplot() +
+  theme_bw() + 
+  geom_point(aes(color = Species), alpha = 0.5) + 
+  scale_color_manual(values=c("darkorange", "deepskyblue", "darkred")) + 
+  geom_encircle(aes(color=Species, group=Species), size = 2, lty = 2)
+
+hist(bees2017_MOA$count)
+
+plot(count ~ MCL, data = bees2017_MOA)
+```
+
+#### Model 
+
+```{r}
+MOAmod <- glm.nb(count ~ Treatment*Species + MCL, data = bees2017_MOA)
+
+par(mfrow=c(2,2))
+plot(MOAmod)
+Anova(MOAmod)
+```
+
+#### Plot 
+
+```{r}
+MOA17_means<-emmeans(MOAmod, ~Treatment*Species) 
+means.to.plot<-as.data.frame(summary(MOA17_means))
+means.to.plot$expmean<- exp(means.to.plot$emmean)
+means.to.plot$tfupper<-exp(means.to.plot$emmean + means.to.plot$SE)
+means.to.plot$tlower<-exp(means.to.plot$emmean - means.to.plot$SE)
+exp.mean<-means.to.plot$expmean
+means.to.plot
+
+MOA17.lets<-cld(MOA17_means, Letters = c('a','b','c', 'd'), sort = FALSE)
+MOA17.letters<-dplyr::select(MOA17.lets, Treatment, Species, .group)
+
+ggplot(means.to.plot, aes(x=Treatment, group = Species,
+                          y=means.to.plot$expmean, 
+                          ymin=means.to.plot$tlower,
+                          ymax=means.to.plot$tfupper)) + 
+  theme_bw()+
+  geom_point(stat="identity", 
+             aes(color = Species),
+             size = 3) +
+  geom_line() +
+  ylab("Crithidia count") +
+  geom_errorbar(width=0.025)+
+  theme(axis.text.x = element_text(face = "plain", 
+                                   size = 18,
+                                   vjust = 0.99, 
+                                   hjust = 0.5,
+                                   colour = "black"), 
+        axis.text.y = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=18))+
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)))+
+  theme(axis.title.x = element_text(size=18))+
+  geom_text(aes (y = means.to.plot$expmean, 
+                 label = MOA17.letters$.group), 
+            size = 5, hjust = 1.5) +
+  scale_color_manual(values=c("orchid2", "darkgoldenrod1", "deepskyblue"))+
+  ggtitle("MOA Crithidia")
+```
+
+### Mortality 
+#### With all three species 
+
+```{r}
+# make a survival object
+event <- bees2017$dead
+time<-bees2017$days_til_dead
+survival<-Surv(time, event)
+```
+
+```{r}
+# model survival as the response 
+
+mort1<- coxph(survival ~ Species*Treatment*crithidia_strain + MCL, data=bees2017) 
+mort2<- coxph(survival ~ Species+Treatment+crithidia_strain + MCL, data=bees2017) 
+mort3<- coxph(survival ~ Species+Treatment+crithidia_strain, data=bees2017) 
+
+AICtab(mort1, mort2, mort3)
+```
+
+```{r}
+Anova(mort2)
+summary(mort2)
+
+summary(glht(mort2,linfct=mcp(Treatment="Tukey")))
+summary(glht(mort2,linfct=mcp(Species="Tukey")))
+summary(glht(mort2,linfct=mcp(crithidia_strain="Tukey")))
+```
+
+##### Plot
+
+```{r, eval = FALSE}
+mort_plot <- survfit(survival ~ Species + Treatment + crithidia_strain + MCL, data=bees2017) 
+print(mort_plot)
+summary(mort_plot)
+summary(mort_plot)$table
+
+xtick<-seq(0, 7, by=1)
+
+plot(mort_plot, ylim = c(0, 1.02), xlim = c(0,7.25),
+     xlab = "Time (d)", 
+     ylab = "Survival Probability", 
+     cex.lab = 1.3, 
+     col = c('darkred','orange','forestgreen',
+             'blue', 'goldenrod', 'purple'), 
+     cex = 1,
+     mark.time = 7,
+     lwd=2,
+     main = "Effect of Treatment on Survival Probability")
+axis(1,xtick)
+legend(0.05, 0.7, 
+       levels(bees$Treatment), 
+       cex=1, 
+       col = c('darkred','orange','forestgreen',
+             'blue', 'goldenrod', 'purple'), 
+       pch=17, 
+       title = "Diet")
+```
+
+#### With just SS Crithidia 
+
+```{r}
+# make a survival object
+event <- bees2017_SS$dead
+time <- bees2017_SS$days_til_dead
+survival <- Surv(time, event)
+```
+
+```{r}
+# model survival as the response with the cox proportional hazards model 
+# not including MCL here because it is confounded with species. Will include it in individual species models. 
+mortSS1<- coxph(survival ~ Species * Treatment * inoc_date, data=bees2017_SS) 
+mortSS2<- coxph(survival ~ Species * inoc_date + Treatment, data=bees2017_SS) 
+mortSS3<- coxph(survival ~ Species + Treatment + inoc_date, data=bees2017_SS) 
+mortSS4<- coxme(survival ~ Species + Treatment + (1|inoc_date), data=bees2017_SS)
+mortSS5<- coxph(survival ~ Species + Treatment, data=bees2017_SS) 
+
+AICtab(mortSS1, mortSS2, mortSS3, mortSS4, mortSS5)
+```
+
+Test the assumptions - look at the Schoenfeld Residuals 
+
+In principle, the Schoenfeld residuals are independent of time. A plot that shows a non-random pattern against time is evidence of violation of the PH assumption.
+
+The proportional hazard assumption is supported by a non-significant relationship between residuals and time, and refuted by a significant relationship.
+
+```{r}
+#fit<-cox.zph(mortSS4) # R has aborted the session everytime I've tried to run this. 
+#fit
+
+#ggcoxzph(fit) # why isn't this working anymore? it worked before... 
+```
+
+From the output above, the test is not statistically significant for each of the covariates and the global test is also not statistically significant. If everything is non-significant, we can assume the proportional hazards.
+
+A violations of proportional hazards assumption can be resolved by:
+
+Adding covariate*time interaction
+
+Stratification
+
+Stratification is usefull for “nuisance” confounders, where you do not care to estimate the effect. You cannot examine the effects of the stratification variable (John Fox & Sanford Weisberg).
+
+To read more about how to accomodate with non-proportional hazards, read the following articles:
+
+* Jadwiga Borucka, PAREXEL, Warsaw, Poland. Extensions of cox model for non-proportional hazards purpose. 2013.
+
+* John Fox & Sanford Weisberg. Cox Proportional-Hazards Regression for Survival Data in R.
+
+* Max Gordon. Dealing with non-proportional hazards in R. March 29, 2016.
+
+```{r}
+ggcoxdiagnostics(mortSS3, type = "dfbeta", linear.predictions = TRUE) # only works with coxph (not coxme) 
+```
+
+```{r}
+ggcoxdiagnostics(mortSS3, type = "deviance",
+                 linear.predictions = FALSE, ggtheme = theme_bw())
+```
+
+```{r}
+Anova(mortSS4)
+summary(glht(mortSS4,linfct=mcp(Species="Tukey")))
+summary(glht(mortSS4,linfct=mcp(Treatment="Tukey")))
+
+mod1<-coxph(survival ~ Species + inoc_date, data=bees2017_SS) 
+mod2<-coxph(survival ~ Species, data=bees2017_SS) 
+
+anova(mod1,mod2)
+
+summary(glht(mortSS3,linfct=mcp(inoc_date="Tukey")))
+```
+
+```{r}
+mortSS_plot <- survfit(survival ~ Species + Treatment, data=bees2017_SS)
+ggsurvplot(mortSS_plot, legend = "left")
+
+mortSS_plot2 <- survfit(survival ~ Species, data=bees2017_SS)
+ggsurvplot(mortSS_plot2, legend = "left")
+
+mortSS_plot3 <- survfit(survival ~ Treatment, data=bees2017_SS)
+ggsurvplot(mortSS_plot3, 
+           legend = "left", 
+           palette = c("orange","red","forestgreen"))
+
+mortSS_plot4 <- survfit(survival ~ inoc_date, data=bees2017_SS)
+ggsurvplot(mortSS_plot4, 
+           legend = "left", 
+           palette = c("coral","purple","deepskyblue", "chartreuse3", "darkblue"))
+```
+
+```{r, eval = FALSE}
+## not currently using this code chunk: 
+mort_plot <- survfit(survival ~ Species + Treatment + MCL, data=bees2017_SS) 
+print(mort_plot)
+summary(mort_plot)
+summary(mort_plot)$table
+
+xtick<-seq(0, 7, by=1)
+
+plot(mort_plot, ylim = c(0, 1.02), xlim = c(0,7.25),
+     xlab = "Time (d)", 
+     ylab = "Survival Probability", 
+     cex.lab = 1.3, 
+     col = c('darkred','orange','forestgreen',
+             'blue', 'goldenrod', 'purple'), 
+     cex = 1,
+     mark.time = 7,
+     lwd=2,
+     main = "Effect of Treatment on Survival Probability")
+axis(1,xtick)
+legend(0.05, 0.7, 
+       levels(bees$Treatment), 
+       cex=1, 
+       col = c('darkred','orange','forestgreen',
+             'blue', 'goldenrod', 'purple'), 
+       pch=17, 
+       title = "Diet")
+```
+
+# Single Species 
+## B. bimaculatus & B. griseocollis together - all Crithidia sources
+
+### Get set up 
+
+```{r}
+b_g <- bees2017 %>% 
+  filter(Species != "B. impatiens")
+```
+
+### Data exploration for counts 
+
+```{r}
+summary(b_g$Treatment)
+```
+
+```{r}
+# remove dead bees
+b_g_alive <- b_g %>% 
+  filter(count != ".")
+
+summary(b_g_alive$Species)
+summary(b_g_alive$Treatment)
+
+# replace lost wing values (NAs) with mean wing 
+b_g_alive<- b_g_alive %>% 
+  mutate(wing = case_when(is.na(MCL) ~ mean(MCL, na.rm = TRUE), 
+                          TRUE ~ as.numeric(MCL)
+                          )
+         )
+```
+
+### Model 
+
+```{r}
+# treatment, species, strain
+# interaction
+b_g_mod <- glmer.nb(count ~ Treatment*Species*crithidia_strain + wing + (1|inoc_date), data = b_g_alive)
+b_g_mod2 <- glm.nb(count ~ Treatment*Species*crithidia_strain + wing, data = b_g_alive)
+b_g_mod3 <- glm.nb(count ~ Treatment*Species*crithidia_strain, data = b_g_alive)
+#additive
+b_g_mod4 <- glmer.nb(count ~ Treatment + Species + crithidia_strain + wing + (1|inoc_date), data = b_g_alive)
+b_g_mod5 <- glm.nb(count ~ Treatment + Species + crithidia_strain + wing, data = b_g_alive)
+b_g_mod6 <- glm.nb(count ~ Treatment + Species + crithidia_strain, data = b_g_alive)
+
+# no strain 
+#interaction
+b_g_mod7 <- glmer.nb(count ~ Treatment*Species + wing + (1|inoc_date), data = b_g_alive)
+b_g_mod8 <- glm.nb(count ~ Treatment*Species + wing, data = b_g_alive)
+b_g_mod9 <- glm.nb(count ~ Treatment*Species, data = b_g_alive)
+#additive
+b_g_mod10 <- glmer.nb(count ~ Treatment + Species + wing + (1|inoc_date), data = b_g_alive)
+b_g_mod11 <- glm.nb(count ~ Treatment + Species + wing, data = b_g_alive)
+b_g_mod12 <- glm.nb(count ~ Treatment + Species, data = b_g_alive)
+
+AICtab(b_g_mod, b_g_mod2, b_g_mod3, b_g_mod4, b_g_mod5, b_g_mod6, b_g_mod7, b_g_mod8, b_g_mod9, b_g_mod10, b_g_mod11, b_g_mod12)
+```
+
+```{r}
+plot(b_g_mod11)
+summary(b_g_mod11)
+Anova(b_g_mod11)
+```
+
+### Plot 
+
+```{r}
+b_g_means<-emmeans(b_g_mod11, ~Treatment + Species) 
+means.to.plot<-as.data.frame(summary(b_g_means))
+means.to.plot$expmean<- exp(means.to.plot$emmean)
+means.to.plot$tfupper<-exp(means.to.plot$emmean + means.to.plot$SE)
+means.to.plot$tlower<-exp(means.to.plot$emmean - means.to.plot$SE)
+exp.mean<-means.to.plot$expmean
+means.to.plot
+```
+
+```{r}
+b_g.lets<-cld(b_g_means, Letters = c('a','b','c', 'd'), sort = FALSE)
+b_g.letters<-dplyr::select(b_g.lets, Treatment, Species, .group)
+
+ggplot(means.to.plot, aes(x=Treatment, group = Species,
+                          y=means.to.plot$expmean, 
+                          ymin=means.to.plot$tlower,
+                          ymax=means.to.plot$tfupper)) + 
+  theme_bw()+
+  geom_point(stat="identity", 
+             aes(color = Species),
+             size = 3) +
+  geom_line() +
+  ylab("Crithidia count") +
+  geom_errorbar(width=0.025)+
+  theme(axis.text.x = element_text(face = "plain", 
+                                   size = 18,
+                                   vjust = 0.99, 
+                                   hjust = 0.5,
+                                   colour = "black"), 
+        axis.text.y = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=18))+
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)))+
+  theme(axis.title.x = element_text(size=18))+
+  geom_text(aes (y = means.to.plot$expmean, 
+                 label = b_g.letters$.group), 
+            size = 5, hjust = 1.5) +
+  scale_color_manual(values=c("orchid2", "darkgoldenrod1", "deepskyblue"))+
+  ggtitle("Griseocollis and Bimaculatus")
+```
+
+### Mortality 
+
+```{r}
+b_g$crithidia_strain <- as.factor(b_g$crithidia_strain)
+
+# make a survival object
+event <- b_g$dead
+time <- b_g$days_til_dead
+survival <- Surv(time, event)
+```
+
+```{r}
+# model survival as the response with the cox proportional hazards model 
+# not including MCL here because it is confounded with species. Will include it in individual species models. 
+
+mortbg1<- coxph(survival ~ Treatment*Species * crithidia_strain, data=b_g) 
+mortbg2<- coxph(survival ~ Treatment*Species + crithidia_strain, data=b_g) 
+
+mortbg3<- coxme(survival ~ Treatment * crithidia_strain + (1|inoc_date), data=b_g)
+mortbg4<- coxme(survival ~ Treatment + crithidia_strain + (1|inoc_date), data=b_g)
+
+mortbg5<- coxph(survival ~ Treatment, data=b_g)
+mortbg6<- coxph(survival ~ crithidia_strain, data=b_g)
+
+AICtab(mortbg1, mortbg2, mortbg3, mortbg4, mortbg5, mortbg6)
+```
+
+```{r}
+Anova(mortbg4)
+```
+
+```{r}
+summary(glht(mortbg4,linfct=mcp(Treatment="Tukey")))
+```
+
+```{r}
+mortbg_plot <- survfit(survival ~ Treatment, data=b_g)
+ggsurvplot(mortbg_plot, legend = "left",palette = c("orange","red","forestgreen"))
+```
+
+## B. impatiens 
+
+### Get set up 
+
+```{r, results = 'hide', message = FALSE}
+imps <- bees2017 %>% 
+  filter(Species == "B. impatiens")
+
+#imps<-read_csv("2017_imps.csv")
+```
+
+Sample size before removing colony 11 and 9: 59
+
+& after: 42 
+
+```{r}
+# remove dead 
+imps_alive <- imps %>% 
+  filter(count != ".")
+```
+
+Sample size after removing dead: 40 
+
+### Date exploration 
+
+VERY LOW INFECTION OVERALL. All from one colony. Lots of WF bees that had 0 or 1 Crithidia cells. I think we should exclude this data. 
+
+```{r}
+summary(imps_alive$inoc_date)
+summary(imps_alive$Treatment)
+summary(imps_alive$colony)
+
+# colored by inoc date
+imps_alive %>% 
+  ggplot(aes(x = Treatment, y = count)) + 
+  geom_boxplot() +
+  theme_bw() + 
+  geom_point(aes(color = inoc_date), alpha = 0.5) + 
+  scale_color_manual(values=c("darkorange", "deepskyblue", "darkred")) + 
+  geom_encircle(aes(color=inoc_date, group=inoc_date), size = 2, lty = 2)
+
+hist(imps_alive$count)
+
+plot(count ~ MCL, data = imps_alive)
+```
+
+### Models 
+
+```{r}
+imp17_global <- glmer.nb(count ~ Treatment + MCL + (1|inoc_date), data = imps_alive)
+imp17_noRE <- glm.nb(count ~ Treatment + MCL, data = imps_alive)
+imp17_nowing <- glm.nb(count ~ Treatment, data = imps_alive)
+
+
+
+
+isSingular(imp17_global)
+plot(imp17_global) # yikes 
+
+plot(imp17_noRE)
+
+plot(imp17_nowing)
+
+AICtab(imp17_global, imp17_noRE, imp17_nowing)
+
+Anova(imp17_nowing)
+Anova(imp17_noRE)
+```
+
+### Plot
+
+### Mortality 
+
+```{r}
+# make a survival object
+event <- imps$dead
+time <- imps$days_til_dead
+survival <- Surv(time, event)
+```
+
+```{r}
+# model survival as the response with the cox proportional hazards model 
+
+morti1<- coxme(survival ~ Treatment + MCL + (1|inoc_date), data=imps) 
+morti2<- coxph(survival ~ Treatment + MCL, data=imps) 
+morti3<- coxme(survival ~ Treatment + (1|inoc_date), data=imps) 
+morti4<- coxph(survival ~ Treatment + MCL, data=imps) 
+morti5<- coxph(survival ~ Treatment, data=imps) 
+
+AICtab(morti1, morti2, morti3, morti4, morti5)
+```
+Pasted from: https://stat.ethz.ch/pipermail/r-help/2008-September/174201.html
+
+  Usually you can ignore the message, it is mostly for your information. The 
+key things to note are
+
+   a. When one of the coefficients goes to infinity in a Cox model, the Wald 
+test of significance beta/se(beta) breaks down, and is no longer reliable.  
+     The LR test however is still valid.  Hence routines like stepAIC are ok.
+So are predicted values, residuals, etc etc.  In fact it is pretty much only the 
+Wald test that needs to be ignored: it is based on a Taylor series that simply 
+doesn't work that far from zero.  Oops -- confidence intervals based on the se 
+are also useless.
+
+   b. The actual value of beta that is reported depends on the convergence 
+criteria for the routine.  So this is one case where different Cox model 
+functions can give results that look different.  I work in medical research, and 
+view these differences as unimportant: if I were to tell you that your relative 
+risk of death was exp(11) = 59,774 fold greater than your compatriots, would the 
+message be substantially changed for beta of 10 or 12?
+  There is a statistical literature under the heading of "monotone likelihood 
+ratio" that worries about these coefficients and tries to fix them.  Much ado 
+about nothing, IMHO.  
+  
+   c. For a large beta and a very skewed covariate the message can sometimes be 
+wrong.  Beta is finite, just unstable. I might still prefer the LR to the Wald 
+in this case.  Spline fits based on the truncated power basis (which Frank 
+Harrell uses) are one way to generate such spurious messages.  
+   Frank has argued with me that these messages may be shedding more confusion 
+than illumination.  He has a point.
+   
+   	Terry Therneau
+
+```{r}
+ggcoxdiagnostics(morti2, 
+                 type = "deviance",
+                 linear.predictions = FALSE, 
+                 ggtheme = theme_bw())  
+# just to see - not the model we're using! 
+```
+
+```{r}
+Anova(morti3)
+```
+
+```{r}
+summary(glht(morti3,linfct=mcp(Treatment="Tukey")))
+```
+
+Plots
+
+```{r}
+plot(dead ~ MCL, data=imps)
+morti_plot <- survfit(survival ~ Treatment, data=imps)
+ggsurvplot(morti_plot, legend = "left",palette = c("orange","red","forestgreen"))
+```
+
+## B. bimaculatus 
+
+### Get set up 
+
+```{r, results = 'hide', message = FALSE}
+bimacs<- bees2017 %>% 
+  filter(Species == "B. bimaculatus")
+```
+
+```{r}
+bimacs_alive<- bees2017_alive %>% 
+  filter(Species == "B. bimaculatus")
+```
+
+```{r}
+class(bimacs$crithidia_strain)
+# reverse order of the strains to make the plot easier 
+levels(bimacs$crithidia_strain)
+bimacs$crithidia_strain <- relevel(bimacs$crithidia_strain, "MOA")
+```
+
+### Data exploration
+
+```{r}
+summary(bimacs$crithidia_strain)
+summary(bimacs$inoc_date)
+summary(bimacs$colony)
+summary(bimacs$Treatment)
+
+# colored by crithidia
+bimacs %>% 
+  ggplot(aes(x = Treatment, y = count)) + 
+  geom_boxplot() +
+  theme_bw() + 
+  geom_point(aes(color = crithidia_strain), alpha = 0.5) + 
+  scale_color_manual(values=c("deepskyblue", "darkred")) + 
+  geom_encircle(aes(color=crithidia_strain, group=crithidia_strain), size = 2, lty = 2)
+
+plot(count ~ MCL, data = bimacs)
+hist(bimacs$count)
+```
+
+### Models 
+
+```{r}
+# all FEs and both REs
+bimac_global <- glmer.nb(count ~ Treatment + crithidia_strain + MCL + (1|inoc_date) + (1|colony), data=bimacs)
+bimac_global_int <- glmer.nb(count ~ Treatment * crithidia_strain + MCL + (1|inoc_date) + (1|colony), data=bimacs)
+
+# all FEs and one RE
+bimac_1 <- glmer.nb(count ~ Treatment + crithidia_strain + MCL + (1|colony), data=bimacs)
+bimac_1_int <- glmer.nb(count ~ Treatment * crithidia_strain + MCL + (1|colony), data=bimacs)
+bimac_2 <- glmer.nb(count ~ Treatment + crithidia_strain + MCL + (1|inoc_date), data=bimacs)
+bimac_2_int <- glmer.nb(count ~ Treatment * crithidia_strain + MCL + (1|inoc_date), data=bimacs)
+
+# ^ All of the above models gave warning for singular fit 
+
+# all FEs and no REs 
+bimac_3 <- glm.nb(count ~ Treatment + crithidia_strain + MCL, data=bimacs)
+bimac_3_int <- glm.nb(count ~ Treatment * crithidia_strain + MCL, data=bimacs)
+
+AICtab(bimac_global, bimac_global_int, bimac_1, bimac_1_int, bimac_2, bimac_2_int, bimac_3, bimac_3_int)
+```
+
+Model 3 with interaction and no REs does best 
+
+```{r}
+# now start removing FEs from bimac_3_int model 
+
+# no wing 
+bimac_4 <- glm.nb(count ~ Treatment * crithidia_strain, data = bimacs)
+
+# no wing or strain 
+bimac_5 <- glm.nb(count ~ Treatment, data = bimacs)
+
+# no strain 
+bimac_6 <- glm.nb(count ~ Treatment + MCL, data = bimacs)
+
+AICtab(bimac_3_int, bimac_4, bimac_5, bimac_6)
+```
+
+MODEL TO USE for 2017 BIMACS: 
+Model 4: count ~ Treatment * crithidia_strain
+
+```{r}
+par(mfrow=c(2,2))
+plot(bimac_4)
+simresid <- simulateResiduals(bimac_4, plot = T)
+Anova(bimac_4)
+summary(bimac_4)
+```
+
+### Plot
+
+```{r}
+bimac_means<-emmeans(bimac_4, ~Treatment*crithidia_strain) 
+means.to.plot<-as.data.frame(summary(bimac_means))
+means.to.plot$expmean<- exp(means.to.plot$emmean)
+means.to.plot$tfupper<-exp(means.to.plot$emmean + means.to.plot$SE)
+means.to.plot$tlower<-exp(means.to.plot$emmean - means.to.plot$SE)
+exp.mean<-means.to.plot$expmean
+means.to.plot
+
+bimac.lets<-cld(bimac_means, Letters = c('a','b','c', 'd'), sort = FALSE)
+bimac.letters<-dplyr::select(bimac.lets, Treatment, crithidia_strain, .group)
+```
+
+```{r}
+bim_2017_plot<-
+  ggplot(means.to.plot, aes(x=Treatment, group = crithidia_strain,
+                          y=means.to.plot$expmean, 
+                          ymin=means.to.plot$tlower,
+                          ymax=means.to.plot$tfupper)) + 
+  theme_classic()+
+  geom_point(stat="identity",
+             aes(shape = crithidia_strain,
+                 color = Treatment),
+             position = position_dodge(width = 0.2),
+             size = 5.5) +
+  geom_errorbar(width=0.05, 
+                aes(color = Treatment),
+                position = position_dodge(width = 0.2))+
+  theme(axis.text.y = element_text(face="plain",
+                                   size = 15,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"),
+        axis.text.x = element_text(face="plain",
+                                   size = 15,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"),
+        text = element_text(size=18))+
+  geom_text(aes (y = means.to.plot$expmean, 
+                 label = bimac.letters$.group), 
+            size = 5, position = position_dodge(width = 0.8)) +
+  scale_shape_manual(expression(paste(italic("Crithidia"))),
+                     labels = c("IMP-3",
+                                "IMP-2"),
+                     values = c(15, 17),
+                     guide = "legend") + 
+  scale_x_discrete(labels = c("100% SF", "50% SF", "Control")) +
+  scale_color_manual(name = "Pollen Diet",
+                       labels = c("100% Sunflower",
+                                  "50% Sunflower",
+                                  "Control"),
+                       values = c("chocolate2", "goldenrod1", "royalblue3")) +
+  guides(color = FALSE) +
+  theme(legend.position=c(.2,.75)) + 
+  theme(axis.title.x = element_blank()) +  
+  theme(axis.title.y = element_blank()) + 
+  geom_text(x = 3.35, y = 90, label = "2017", size = 4) + 
+  ggtitle("")
+  
+bim_2017_plot
+```
+
+### Crithidia presence absence for bimaculatus - only 4 out of 52 bimacs had counts of 0 
+
+```{r}
+# both RE 
+bimac_presence1 <- glmer(Presence ~ Treatment + crithidia_strain + MCL + (1|colony) + (1|inoc_date), family = binomial(link = "logit"), data = bimacs_alive)
+
+bimac_presence2 <- glmer(Presence ~ Treatment * crithidia_strain + MCL + (1|colony) + (1|inoc_date), family = binomial(link = "logit"), data = bimacs_alive)
+
+# just colony RE
+bimac_presence3 <- glmer(Presence ~ Treatment + crithidia_strain + MCL + (1|colony), family = binomial(link = "logit"), data = bimacs_alive)
+
+bimac_presence4 <- glmer(Presence ~ Treatment * crithidia_strain + MCL + (1|colony), family = binomial(link = "logit"), data = bimacs_alive)
+
+# just inoc date RE
+bimac_presence5 <- glmer(Presence ~ Treatment + crithidia_strain + MCL + (1|inoc_date), family = binomial(link = "logit"), data = bimacs_alive)
+
+bimac_presence6 <- glmer(Presence ~ Treatment * crithidia_strain + MCL + (1|inoc_date), family = binomial(link = "logit"), data = bimacs_alive)
+
+#neither RE
+bimac_presence7 <- glm(Presence ~ Treatment + crithidia_strain + MCL, family = binomial(link = "logit"), data = bimacs_alive)
+
+bimac_presence8 <- glm(Presence ~ Treatment * crithidia_strain + MCL, family = binomial(link = "logit"), data = bimacs_alive)
+
+AICtab(bimac_presence1, bimac_presence2, bimac_presence3, bimac_presence4, bimac_presence5, bimac_presence6, bimac_presence7, bimac_presence8)
+```
+
+7 is best out of these options 
+
+```{r}
+bimac_presence9 <- glm(Presence ~ Treatment + crithidia_strain, family= binomial(link = "logit"), data = bimacs_alive)
+
+bimac_presence10 <- glm(Presence ~ Treatment, family= binomial(link = "logit"), data = bimacs_alive)
+
+AICtab(bimac_presence7, bimac_presence9, bimac_presence10)
+```
+9 is best: presence ~ Treatment + strain 
+
+``` {r}
+summary(bimac_presence9)
+Anova(bimac_presence9)
+anova(bimac_presence9, test = "Chisq")
+wald.test(b = coef(bimac_presence9), Sigma = vcov(bimac_presence9), Terms = 2) # term 2 = Diet 
+```
+
+```{r}
+Treatment <- c("SF", "50-50", "WF")
+crithidia_strain <- c("IMP-MA-SS","IMP-MA-SS", "IMP-MA-SS",
+            "MOA", "MOA", "MOA")
+newdata <- data.frame(crithidia_strain, Treatment)
+newdata$dietP <- predict(bimac_presence9, newdata = newdata, type = "response")
+newdata
+```
+
+```{r}
+newdata2 <- cbind(newdata, predict(bimac_presence9, newdata = newdata, type = "link", se = T))
+newdata2
+```
+
+```{r}
+newdata3 <- within(newdata2, {
+    PredictedProb <- plogis(fit)
+    LL <- plogis(fit - (1.96 * se.fit)) # this translates to a 95% CI  
+    UL <- plogis(fit + (1.96 * se.fit))
+})
+
+newdata3
+
+```
+
+```{r}
+ggplot(newdata3, aes(x=Treatment, group = Treatment,
+                          y=dietP, 
+                          ymin=LL,
+                          ymax=UL)) + 
+  theme_bw()+
+  geom_point(stat="identity",
+             aes(shape = crithidia_strain,
+                 color = Treatment),
+             size = 4) +
+  geom_errorbar(width=0.025)+
+  theme(axis.text.x = element_text(face = "plain", 
+                                   size = 18,
+                                   vjust = 0.99, 
+                                   hjust = 0.5,
+                                   colour = "black"), 
+        axis.text.y = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=18))+
+  scale_shape_manual(expression(paste(italic("Crithidia"))),
+                     labels = c("IMP-2",
+                                "IMP-3"),
+                     values = c(15, 17),
+                     guide = "legend") + 
+  scale_color_manual(values = c("orange", "gold1", "forestgreen")) + 
+  guides(color = FALSE) +
+  theme(legend.position=c(.15,.15)) + 
+  theme(axis.title.x = element_blank()) + 
+  theme(axis.title.y = element_blank()) + 
+  ggtitle("2017") + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+But actually, we're only going to use IMP-SS subset to estimate presence since all MOA bees were infected 
+```{r}
+bimacs_17_SS <- bimacs_alive %>% 
+  filter(crithidia_strain == "IMP-MA-SS")
+
+bimac_presence11 <- glm(Presence ~ Treatment, family = binomial(link="logit"), data = bimacs_17_SS)
+Anova(bimac_presence11)
+simresid <- simulateResiduals(bimac_presence11, plot = T)
+```
+
+
+### Mortality 
+
+```{r}
+# make a survival object
+event <- bimacs$dead
+time <- bimacs$days_til_dead
+survival <- Surv(time, event)
+```
+
+```{r}
+# model survival as the response with the cox proportional hazards model 
+mortb1<- coxph(survival ~ Treatment * crithidia_strain + MCL, data=bimacs) 
+mortb2<- coxph(survival ~ Treatment + crithidia_strain + MCL, data=bimacs) 
+
+mortb3<- coxme(survival ~ Treatment * crithidia_strain + MCL + (1|inoc_date), data=bimacs)
+mortb4<- coxme(survival ~ Treatment + crithidia_strain + MCL + (1|inoc_date), data=bimacs)
+
+mortb5<- coxph(survival ~ Treatment + MCL, data=bimacs)
+mortb6<- coxph(survival ~ crithidia_strain + MCL, data=bimacs)
+
+mortb7<- coxph(survival ~ Treatment, data=bimacs)
+mortb8<- coxph(survival ~ crithidia_strain, data=bimacs)
+
+mortb9<- coxme(survival ~ Treatment + MCL + (1|inoc_date), data=bimacs)
+mortb10<- coxme(survival ~ crithidia_strain + MCL + (1|inoc_date), data=bimacs)
+
+mortb11<-coxph(survival ~ Treatment + crithidia_strain + MCL + inoc_date, data = bimacs)
+
+
+AICtab(mortb1, mortb2, mortb3, mortb4, mortb5, mortb6, mortb7, mortb8, mortb9, mortb10)
+```
+
+```{r}
+ggcoxdiagnostics(mortb1, 
+                 type = "deviance",
+                 linear.predictions = FALSE, 
+                 ggtheme = theme_bw())  
+# just to see - not the model we're using! 
+```
+
+```{r}
+Anova(mortb9)
+Anova(mortb4)
+```
+
+```{r}
+summary(glht(mortb9,linfct=mcp(Treatment="Tukey")))
+
+summary(glht(mortb4,linfct=mcp(Treatment="Tukey")))
+summary(glht(mortb4,linfct=mcp(crithidia_strain="Tukey")))
+```
+
+Plots
+
+```{r}
+plot(dead ~ MCL, data=bimacs)
+mortb_plot <- survfit(survival ~ Treatment, data=bimacs)
+ggsurvplot(mortb_plot, legend = "left",palette = c("orange","red","forestgreen"))
+```
+
+## B. griseocollis 
+
+### Get set up 
+
+```{r, results = 'hide', message = FALSE}
+gris <- bees2017 %>% 
+  filter(Species == "B. griseocollis")
+```
+
+```{r}
+gris_alive <- bees2017_alive %>% 
+  filter(Species == "B. griseocollis")
+```
+
+```{r}
+# remove the two other crithidia sources 
+
+gris2<- gris %>% 
+  filter(crithidia_strain == "IMP-MA-SS")
+```
+
+### Data exploration 
+
+```{r}
+summary(gris_alive)
+summary(gris_alive$inoc_date)
+summary(gris_alive$colony)
+summary(gris_alive$Treatment)
+
+# colored by crithidia
+gris_alive %>% 
+  ggplot(aes(x = Treatment, y = count)) + 
+  geom_boxplot() +
+  theme_bw() + 
+  geom_point(aes(color = crithidia_strain), alpha = 0.5) + 
+  scale_color_manual(values=c("deepskyblue", "darkred","violet")) + 
+  geom_encircle(aes(color=crithidia_strain, group=crithidia_strain), size = 2, lty = 2)
+
+# since there ended up being so few survivors in the other two crithidia source groups, I think we should analyze gris with just the SS. 
+
+plot(count ~ MCL, data = gris2) + abline(a = exp(0.3420),
+                                              b = 25.9)
+hist(gris_alive$count)
+```
+
+```{r}
+gris2 %>% 
+  ggplot(aes(x = Treatment, y = count)) + 
+  geom_boxplot() +
+  theme_bw() + 
+  geom_point(aes(color = colony), alpha = 0.5) + 
+  scale_color_manual(values=c("deepskyblue", "darkred","violet", "darkorange", "gold")) + 
+  geom_encircle(aes(color=colony, group=colony), size = 2, lty = 2)
+```
+
+### Models 
+
+```{r}
+#gris_global <- glmer.nb(count ~ Treatment + MCL + (1|inoc_date) + (1|colony), data=gris2)
+gris_1 <- glmer.nb(count ~ Treatment +  MCL + (1|colony), data=gris2)
+gris_2 <- glmer.nb(count ~ Treatment + MCL + (1|inoc_date), data=gris2)
+isSingular(gris_2)
+gris_3 <- glm.nb(count ~ Treatment + MCL, data=gris2)
+gris_4 <- glm.nb(count ~ Treatment, data=gris2)
+
+AICtab(gris_1, gris_2, gris_3, gris_4)
+```
+
+```{r}
+# gris_5 <- glmmTMB(count ~ Treatment + MCL + (1|colony), family = nbinom2, data = gris2)
+# gris_6 <- glmmTMB(count ~ Treatment + MCL, family = nbinom2, data = gris2)
+
+# both of these return errors - need to look up if want to use this function 
+```
+
+```{r}
+plot(gris_1)
+simresid <- simulateResiduals(gris_1, plot = T) 
+# deviates significantly - need to use another model 
+
+plot(gris_3)
+simresid <- simulateResiduals(gris_3, plot = T)
+
+# so problem: gris_1 has lower AIC but doesn't pass simulation test. gris_3 has higher AIC but does pass simulation test. 
+# should we just use gris_3 then? 
+```
+
+```{r}
+summary(gris_1)
+hist(resid(gris_1))
+# E1 <- resid(gris_1, type = "normalized") # this doesn't work, not sure why 
+# coplot(E1 ~ ID, data=gris2, ylab = "Ordinary residuals")
+```
+
+```{r}
+summary(gris_3)
+hist(resid(gris_3))
+```
+
+So... why do the residuals look much more normal in gris_1 than gris_3, yet the simulation test seems to not reflect that? 
+
+Not sure which model to use here, but let's go with the one that passes the DHARMA sim test - gris 3. 
+
+```{r}
+summary(gris2$colony)
+Beta <- vector(length = 5)
+for (i in 1:5) {
+  Mi <- summary(gris_3)
+  Beta[i] <- Mi$coefficients[2,1]}
+
+Beta
+```
+
+```{r}
+Anova(gris_1)
+Anova(gris_3)
+```
+
+### Plot
+
+```{r}
+gris_means<-emmeans(gris_3, ~Treatment) 
+g.17.means.to.plot<-as.data.frame(summary(gris_means))
+g.17.means.to.plot$expmean<- exp(g.17.means.to.plot$emmean)
+g.17.means.to.plot$tfupper<-exp(g.17.means.to.plot$emmean + g.17.means.to.plot$SE)
+g.17.means.to.plot$tlower<-exp(g.17.means.to.plot$emmean - g.17.means.to.plot$SE)
+exp.mean<-g.17.means.to.plot$expmean
+g.17.means.to.plot
+
+gris.lets<-cld(gris_means, Letters = c('a','b','c', 'd'), sort = FALSE)
+gris.letters<-dplyr::select(gris.lets, Treatment, .group)
+```
+
+```{r}
+gris_2017_plot<-
+  ggplot(g.17.means.to.plot, aes(x=Treatment, group = Treatment,
+                          y=g.17.means.to.plot$expmean, 
+                          ymin=g.17.means.to.plot$tlower,
+                          ymax=g.17.means.to.plot$tfupper)) + 
+  theme_classic()+
+  geom_point(stat="identity",
+             aes(color = Treatment),
+             size = 5.5) +
+  geom_errorbar(width=0.05, aes(color = Treatment))+
+  theme(axis.text.x = element_blank(), 
+        axis.text.y = element_text(face="plain",
+                                   size = 15,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=15))+
+  scale_shape_manual(expression(paste(italic("Crithidia"))),
+                     labels = c("IMP-2"),
+                     values = c(15),
+                     guide = "legend") + 
+  scale_color_manual(values = c("chocolate2", "goldenrod1", "royalblue3")) + 
+  guides(color = FALSE) +
+  theme(legend.position = "right") + 
+  theme(axis.title.x = element_blank()) + 
+  theme(axis.title.y = element_blank()) + 
+  geom_text(x = 3.35, y = 110, label = "2017", size = 4) + 
+  ggtitle("")
+```
+
+### Crithidia presence absence for gris - 15 out of 69 had counts of zero
+
+```{r}
+gris_presence <- glm(Presence ~ Treatment + MCL, family = binomial(link = "logit"), data = gris_alive)
+gris_presence2 <- glmer(Presence ~ Treatment + MCL + (1|colony), family = binomial(link = "logit"), data = gris_alive) 
+gris_presence3 <- glmer(Presence ~ Treatment + MCL + (1|colony) + (1|inoc_date), family = binomial(link = "logit"), data = gris_alive) 
+gris_presence4 <- glmer(Presence ~ Treatment + (1|colony) + (1|inoc_date), family = binomial(link = "logit"), data = gris_alive)
+gris_presence5 <- glmer(Presence ~ Treatment + (1|colony) , family = binomial(link = "logit"), data = gris_alive)
+
+AICtab(gris_presence, gris_presence2, gris_presence3, gris_presence4, gris_presence5)
+Anova(gris_presence5)
+
+summary(gris_presence)
+Anova(gris_presence)
+anova(gris_presence, test = "Chisq")
+```
+
+```{r}
+emmeans(gris_presence,~Treatment + MCL)
+MCL <- 3.36
+Treatment <- c("SF", "50-50", "WF")
+newdata <- data.frame(MCL, Treatment)
+newdata$dietP <- predict(gris_presence, newdata = newdata, type = "response")
+newdata
+
+#newdata$inverse <- 1-newdata$dietP
+#newdata
+```
+
+```{r}
+newdata2 <- cbind(newdata, predict(gris_presence, newdata = newdata, type = "link", se = T))
+newdata2
+```
+
+```{r}
+newdata3 <- within(newdata2, {
+    PredictedProb <- plogis(fit)
+    LL <- plogis(fit - (1.96 * se.fit)) # this translates to a 95% CI  
+    UL <- plogis(fit + (1.96 * se.fit))
+})
+
+newdata3
+```
+
+### Model with ALL Crithidia sources 
+
+```{r}
+gris_1_all <- glmer.nb(count ~ Treatment*crithidia_strain +  MCL + (1|colony), data=gris)
+gris_2_all <- glmer.nb(count ~ Treatment*crithidia_strain + MCL + (1|inoc_date), data=gris)
+gris_3_all <- glm.nb(count ~ Treatment*crithidia_strain + MCL, data=gris)
+gris_4_all <- glm.nb(count ~ Treatment*crithidia_strain, data=gris)
+gris_5_all <- glmer.nb(count ~ Treatment*crithidia_strain + (1|colony), data=gris)
+
+gris_6_all <- glmer.nb(count ~ Treatment+crithidia_strain +  MCL + (1|colony), data=gris)
+gris_7_all <- glmer.nb(count ~ Treatment+crithidia_strain + MCL + (1|inoc_date), data=gris)
+gris_8_all <- glm.nb(count ~ Treatment+crithidia_strain + MCL, data=gris)
+gris_9_all <- glm.nb(count ~ Treatment+crithidia_strain, data=gris)
+gris_10_all <- glmer.nb(count ~ Treatment+crithidia_strain + (1|colony), data=gris)
+
+AICtab(gris_1_all, gris_2_all, gris_3_all, gris_4_all, gris_5_all,
+       gris_6_all, gris_7_all, gris_8_all, gris_9_all, gris_10_all)
+
+plot(gris_6_all)
+Anova(gris_6_all)
+```
+
+### Plot with ALL Crithidia sources
+
+```{r}
+gris_means_all<-emmeans(gris_1_all, ~ Treatment*crithidia_strain) 
+means.to.plot<-as.data.frame(summary(gris_means_all))
+means.to.plot$expmean<- exp(means.to.plot$emmean)
+means.to.plot$tfupper<-exp(means.to.plot$emmean + means.to.plot$SE)
+means.to.plot$tlower<-exp(means.to.plot$emmean - means.to.plot$SE)
+exp.mean<-means.to.plot$expmean
+means.to.plot
+
+gris.lets_all<-cld(gris_means_all, Letters = c('a','b','c', 'd'), sort = FALSE)
+gris.letters_all<-dplyr::select(gris.lets_all, Treatment, .group)
+
+ggplot(means.to.plot, aes(x=Treatment, group = crithidia_strain,
+                          y=means.to.plot$expmean, 
+                          ymin=means.to.plot$tlower,
+                          ymax=means.to.plot$tfupper)) + 
+  theme_bw()+
+  geom_point(stat="identity",
+             aes(color = crithidia_strain),
+             size = 3) +
+  geom_line() +
+  ylab("Crithidia count") +
+  geom_errorbar(width=0.025)+
+  theme(axis.text.x = element_text(face = "plain", 
+                                   size = 18,
+                                   vjust = 0.99, 
+                                   hjust = 0.5,
+                                   colour = "black"), 
+        axis.text.y = element_text(face="plain",
+                                   size = 18,
+                                   angle = 0,
+                                   vjust = 0.5, 
+                                   hjust = 0.5,
+                                   colour = "black"))+
+  theme(text = element_text(size=18))+
+  theme(axis.title.y = element_text(margin = margin(t = 0, r = 20, b = 0, l = 0)))+
+  theme(axis.title.x = element_text(size=18))+
+  geom_text(aes (y = means.to.plot$expmean, 
+                 label = gris.letters_all$.group), 
+            size = 5, hjust = 1.5) +
+  scale_color_manual(values=c("purple", "red", "turquoise"))+
+  ggtitle("2017 B. griseocollis with \n all Crithidia strains")
+```
+
+### Mortality 
+
+```{r}
+# subset out SS 
+
+gris <- gris %>% 
+  filter(crithidia_strain == "IMP-MA-SS")
+```
+
+
+```{r}
+# make a survival object
+event <- gris$dead
+time <- gris$days_til_dead
+survival <- Surv(time, event)
+```
+
+```{r}
+# Models with just SS 
+
+mortg1<- coxph(survival ~ Treatment + MCL, data=gris) 
+mortg2<- coxme(survival ~ Treatment + MCL + (1|inoc_date), data=gris)
+mortg3 <- coxme(survival ~ Treatment + (1|inoc_date), data = gris)
+
+
+AICtab(mortg1, mortg2, mortg3)
+```
+
+```{r}
+Anova(mortg2)
+
+summary(glht(mortg2,linfct=mcp(Treatment="Tukey")))
+```
+
+NOTE: Before rerunning the code below, need to go back and change gris to include other crithidia strains! 
+```{r}
+# model survival as the response with the cox proportional hazards model 
+
+# be careful because crithidia strain is confounded by inoculation date 
+
+mortg1<- coxph(survival ~ Treatment * crithidia_strain + MCL, data=gris) 
+mortg2<- coxph(survival ~ Treatment + crithidia_strain + MCL, data=gris) 
+
+mortg3<- coxme(survival ~ Treatment * crithidia_strain + MCL + (1|inoc_date), data=gris)
+mortg4<- coxme(survival ~ Treatment + crithidia_strain + MCL + (1|inoc_date), data=gris)
+
+mortg5<- coxph(survival ~ Treatment + MCL, data=gris)
+mortg6<- coxph(survival ~ crithidia_strain + MCL, data=gris)
+
+mortg7<- coxph(survival ~ Treatment, data=gris)
+mortg8<- coxph(survival ~ crithidia_strain, data=gris)
+
+mortg9<- coxme(survival ~ Treatment + MCL + (1|inoc_date), data=gris)
+mortg10<- coxme(survival ~ crithidia_strain + MCL + (1|inoc_date), data=gris)
+
+mortg11<-coxph(survival ~ Treatment + crithidia_strain + MCL + inoc_date, data = gris)
+
+
+AICtab(mortg1, mortg2, mortg3, mortg4, mortg5, mortg6, mortg7, mortg8, mortg9, mortg10, mortg11)
+```
+
+best models exclude treatment. but we'll use model #4 
+
+```{r}
+ggcoxdiagnostics(mortg11, 
+                 type = "deviance",
+                 linear.predictions = FALSE, 
+                 ggtheme = theme_bw())  
+# just to see - not the model we're using! 
+```
+
+```{r}
+Anova(mortg4)
+```
+
+```{r}
+summary(glht(mortg4,linfct=mcp(crithidia_strain="Tukey")))
+```
+
+Plots
+
+```{r}
+plot(dead ~ MCL, data=gris)
+mortg_plot <- survfit(survival ~ Treatment, data=gris)
+ggsurvplot(mortg_plot, legend = "left",palette = c("orange","red","forestgreen"))
+```

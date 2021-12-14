@@ -1,7 +1,7 @@
 ---
 title: "2016 experiment"
 author: "Alison Fowler"
-date: "11/17/2020"
+date: "12/14/2020"
 output: 
   html_document:
     toc: true
@@ -226,7 +226,7 @@ imp16.letters
 
 ```{r}
 imp_2016_plot<-
-  ggplot(imp.means.to.plot, aes(x=Diet, group = Diet,
+  ggplot(imp.means.to.plot, aes(x=Diet, group = Species,
                           y=mean, 
                           ymin=lower,
                           ymax=upper)) + 
@@ -234,8 +234,11 @@ imp_2016_plot<-
   geom_point(stat="identity",
              aes(color = Diet,
                  shape = Species),
-             size = 5) +
-  geom_errorbar(width=0.05, aes(color = Diet))+
+             position = position_dodge(width = 0.2),
+             size = 5.5) +
+  geom_errorbar(width=0.05, 
+                aes(color = Diet), 
+                position = position_dodge(width = 0.2))+
   theme(axis.text.x = element_blank(), 
         axis.text.y = element_text(face="plain",
                                    size = 15,
@@ -243,10 +246,10 @@ imp_2016_plot<-
                                    vjust = 0.5, 
                                    hjust = 0.5,
                                    colour = "black"))+
-  theme(text = element_text(size=15))+
+  theme(text = element_text(size=18))+
   geom_text(aes (y = imp.means.to.plot$mean, 
                  label = imp16.letters$.group), 
-            size = 5, hjust = 1.5) +
+            size = 5, position = position_dodge(width = 0.55)) +
   scale_shape_manual("Origin",
                      labels = c("Commercial",
                                 "Wild"),
@@ -260,6 +263,7 @@ imp_2016_plot<-
   ggtitle(expression(paste(italic("B. impatiens")))) +
   geom_text(x = 2.35, y = 403, label = "2016", size = 4)
 
+imp_2016_plot
 ```
 
 ### Presence/absence 
@@ -362,7 +366,7 @@ gris_2016_plot<-
   theme_classic()+
   geom_point(stat="identity",
              aes(color = Diet),
-             size = 5) +
+             size = 5.5) +
   geom_errorbar(width=0.05, aes(color = Diet))+
   theme(axis.text.x = element_blank(), 
         axis.text.y = element_text(face="plain",
@@ -371,7 +375,7 @@ gris_2016_plot<-
                                    vjust = 0.5, 
                                    hjust = 0.5,
                                    colour = "black"))+
-  theme(text = element_text(size=15))+
+  theme(text = element_text(size=18))+
   scale_color_manual(values = c("chocolate2", "royalblue3")) + 
   guides(color = FALSE) +
   theme(legend.position = "right") + 

@@ -78,6 +78,14 @@ for(i in 1:length(bimacs18$count)){
     bimacs18$Presence[i] <- 0
   }
 } 
+
+
+class(bimacs18$crithidia_strain)
+# change order of the strains to make the plot easier 
+levels(bimacs18$crithidia_strain)
+bimacs18$crithidia_strain <- relevel(bimacs18$crithidia_strain, "170-B (Colony 170)")
+bimacs18$crithidia_strain <- relevel(bimacs18$crithidia_strain, "129-B, W3-B (Colony 1)")
+levels(bimacs18$crithidia_strain)
 ```
 
 ### Data exploration 
@@ -203,16 +211,19 @@ bimac.18.letters
 
 ```{r}
 bim_2018_plot<-
-  ggplot(b.18.means.to.plot, aes(x=Treatment, group = Treatment,
+  ggplot(b.18.means.to.plot, aes(x=Treatment, group = crithidia_strain,
                           y=b.18.means.to.plot$expmean, 
                           ymin=b.18.means.to.plot$tlower,
                           ymax=b.18.means.to.plot$tfupper)) + 
-  theme_bw()+
+  theme_classic()+
   geom_point(stat="identity",
              aes(shape = crithidia_strain,
                  color = Treatment),
-             size = 5) +
-  geom_errorbar(width=0.05, aes(color = Treatment))+
+             position = position_dodge(width = 0.2),
+             size = 5.5) +
+  geom_errorbar(width=0.05, 
+                aes(color = Treatment),
+                position = position_dodge(width = 0.2))+
   theme(axis.text.x = element_blank(), 
         axis.text.y = element_text(face="plain",
                                    size = 15,
@@ -220,11 +231,11 @@ bim_2018_plot<-
                                    vjust = 0.5, 
                                    hjust = 0.5,
                                    colour = "black"))+
-  theme(text = element_text(size=15))+
+  theme(text = element_text(size=18))+
   scale_shape_manual(expression(paste(italic("Crithidia"))),
-                     labels = c("BIM-3",
-                                "BIM-2",
-                                "BIM-1"),
+                     labels = c("BIM-2",
+                                "BIM-1",
+                                "BIM-3"),
                      values = c(15, 17, 19),
                      guide = "legend") + 
   scale_color_manual(values = c("chocolate2", "royalblue3")) + 
@@ -523,7 +534,7 @@ vagans_plot<-
   theme_classic()+
   geom_point(stat="identity",
              aes(color = Diet),
-             size = 5) +
+             size = 5.5) +
   geom_errorbar(width=0.05, aes(color = Diet)) +
   theme(axis.text.x = element_text(face="plain",
                                    size = 15,
@@ -537,7 +548,7 @@ vagans_plot<-
                                    vjust = 0.5, 
                                    hjust = 0.5,
                                    colour = "black"))+
-  theme(text = element_text(size=15))+
+  theme(text = element_text(size=18))+
   scale_color_manual(values = c("chocolate2", "royalblue3")) + 
   scale_x_discrete(labels = c("100% SF", "Control")) +
   guides(color = FALSE) +

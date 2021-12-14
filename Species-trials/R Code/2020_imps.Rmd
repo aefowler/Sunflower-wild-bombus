@@ -175,7 +175,7 @@ imp_2020_plot<-
   theme_classic()+
   geom_point(stat="identity",
              aes(color = Treatment),
-             size = 5) +
+             size = 5.5) +
   geom_errorbar(width=0.05, aes(color = Treatment))+
   theme(axis.text.x = element_blank(), 
         axis.text.y = element_text(face="plain",
