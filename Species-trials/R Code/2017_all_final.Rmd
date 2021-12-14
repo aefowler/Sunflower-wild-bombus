@@ -422,7 +422,7 @@ bim_2017_plot<-
   geom_point(stat="identity",
              aes(shape = crithidia_strain,
                  color = Treatment),
-             size = 5) +
+             size = 5.5) +
   geom_errorbar(width=0.05, aes(color = Treatment))+
   theme(axis.text.y = element_text(face="plain",
                                    size = 15,
@@ -712,7 +712,7 @@ gris_2017_plot<-
   theme_classic()+
   geom_point(stat="identity",
              aes(color = Treatment),
-             size = 5) +
+             size = 5.5) +
   geom_errorbar(width=0.05, aes(color = Treatment))+
   theme(axis.text.x = element_blank(), 
         axis.text.y = element_text(face="plain",
@@ -721,7 +721,7 @@ gris_2017_plot<-
                                    vjust = 0.5, 
                                    hjust = 0.5,
                                    colour = "black"))+
-  theme(text = element_text(size=15))+
+  theme(text = element_text(size=18))+
   scale_shape_manual(expression(paste(italic("Crithidia"))),
                      labels = c("IMP-2"),
                      values = c(15),
